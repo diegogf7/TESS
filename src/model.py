@@ -45,3 +45,43 @@ class Transformer_Decoder(nn.Module):
     def forward(self, k):
         k = self.Decoder(k)
         return k
+    
+class masking_autoencoder(nn.Module):
+    def __init__(self, patch_size = 16, dimension_vector = 128, number_patches=64, mask_ratio= 0.75):
+        super(masking_autoencoder, self).__init__()
+        self.patch_size = patch_size
+        self.dimension_vector = dimension_vector
+        self.number_patches = number_patches
+        self.mask_ratio = mask_ratio
+        #need to do all four functions
+        self.patches = Patches(patch_size, dimension_vector)
+        self.positions = Positions(number_patches, dimension_vector)
+        self.encoder = Transformer_Encoder(dimension_vector, 4, 256)
+        self.decoder = Transformer_Decoder(dimension_vector, patch_size)
+        
+
+        self.mask_token = nn.Parameter(torch.zeros(1,1, dimension_vector))
+
+    def forward(self, x):
+        x = self.patches(x)
+        x = self.positions(x)
+
+        batch_size = x.shape[0]
+        number_visible = int(self.number_patches * (1 - self.mask_ratio))
+
+        noise_to_observe = torch.rand(batch_size, self.number_patches, device = x.device) #what does this line do?
+        shuffle = torch.argsort(noise_to_observe, dim=1)
+
+        #needed to use claude code for this part it was getting kind of complicated
+        indexes_to_keep = shuffle[:, :number_visible]
+        indexes = indexes_to_keep.unsqueeze(-1).expand(-1,-1, self.dimension_vector)
+        x_visible = torch.gather(x, 1, indexes)
+
+        x_encoder = self.encoder(x_visible)
+
+
+        x_full = self.mask_token.expand(batch_size, self.number_patches, -1).clone()
+        x_full.scatter_(1, indexes, x_encoder)
+
+        x_decoded = self.decoder(x_full)
+        return x_decoded, shuffle
