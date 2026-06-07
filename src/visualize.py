@@ -7,7 +7,7 @@ from model import masking_autoencoder
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = masking_autoencoder()
-model.load_state_dict(torch.load('mae_final.pth', map_location = DEVICE))
+model.load_state_dict(torch.load('/orcd/scratch/orcd/006/diegogon/checkpoints/mae_final.pth', map_location=DEVICE))
 model.eval()
 
 
