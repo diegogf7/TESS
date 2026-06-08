@@ -12,7 +12,7 @@ Want to train a transformer
 '''
 
 
-def resample_to_grid(time, flux, grid_length = 1000): #
+def resample_to_grid(time, flux, grid_length = 1024): #
     
     time_grid = np.linspace(time[0], time[len(time) - 1], grid_length)
 
@@ -36,12 +36,13 @@ def normalize(flux, clip_sigma = 6.0):
     mad = np.median(np.abs(flux - np.median(flux))) #making sure that we got the std but immune to outliers
     scale_to_use = mad * 1.4826 #changing to our std
     if scale_to_use >0:
-        flux = np.clip(flux, -clip_sigma * scale_to_use, clip_sigma * scale_to_use)
+        #flux = np.clip(flux, -clip_sigma * scale_to_use, clip_sigma * scale_to_use) #I think this is the error
+        flux = np.clip(flux, 1.0 - clip_sigma * scale_to_use, 1.0 + clip_sigma * scale_to_use )
     return flux
 
 
 class LightCurveDataset(Dataset):
-    def __init__(self, parquet, grid_length = 1000):
+    def __init__(self, parquet, grid_length = 1024):
         self.df = pd.read_parquet(parquet)
         self.grid_length = grid_length
     def __len__(self):
