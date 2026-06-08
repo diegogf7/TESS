@@ -22,6 +22,9 @@ model = masking_autoencoder().to(DEVICE)
 print(f"Model ready on {DEVICE}", flush=True)
 optimizer = torch.optim.AdamW(model.parameters(), lr = 0.0001)
 
+#need to make a schedule so that we get the most changes initially
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = EPOCHS)
+
 criteria = nn.MSELoss()
 
 for epoch in range(EPOCHS):
@@ -53,8 +56,11 @@ for epoch in range(EPOCHS):
         if batch_idx % 10 == 0:
             print(f"  Epoch {epoch+1}, batch {batch_idx}/{len(dataloader)}, loss: {loss.item():.4f}", flush=True)
 
+
+
     average_loss = total_loss / len(dataloader)
     print(f'Epoch {epoch+1}/{EPOCHS} complete — Avg Loss: {average_loss:.4f}', flush=True)
+    scheduler.step()
     torch.save(model.state_dict(), '/orcd/scratch/orcd/006/diegogon/checkpoints/mae_final.pth')
 
         
