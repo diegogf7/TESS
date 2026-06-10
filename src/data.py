@@ -11,6 +11,9 @@ Want to train a transformer
 
 '''
 
+CLASSES = ['APERIODIC', 'CONTACT_ROT', 'DSCT_BCEP', 'ECLIPSE','GDOR_SPB', 'INSTRUMENT/JUNK', 'RRLYR_CEPH', 'SOLARLIKE']
+
+CLASS_TO_IDX = {c: i for i, c in enumerate(CLASSES)}
 
 def resample_to_grid(time, flux, grid_length = 1024): #
     
@@ -66,6 +69,35 @@ class LightCurveDataset(Dataset):
         return grid_flux, observed
     
 
+class ClassificationDataset(Dataset):
+    def __init__(self, parquet, grid_length = 1024):
+        self.df = pd.read_parquet(parquet)
+        self.grid_length = grid_length
+    
+    def __len__(self):
+        return len(self.df)
+    
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        time = np.array(row["time"])
+        flux = np.array(row["flux"])
+        flux = normalize(flux)
+
+        
+        grid_flux, observed = resample_to_grid(time, flux, self.grid_length)
+
+        grid_flux = torch.tensor(grid_flux, dtype = torch.float32)
+        observed = torch.tensor(observed, dtype = torch.float32)
+
+        label = CLASS_TO_IDX[row['label']]
+        
+        return grid_flux, observed, torch.tensor(label)
+
+
+    
+
+
+
 #code from claude code to make sure I get the right file names for the training
 if __name__ == "__main__":
     path = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/tess_classification.parquet"
@@ -74,5 +106,4 @@ if __name__ == "__main__":
     flux, mask = ds[0]
     print(f"Flux shape: {flux.shape}, dtype: {flux.dtype}")
     print(f"Mask shape: {mask.shape}, sum: {mask.sum()}")
-
 
