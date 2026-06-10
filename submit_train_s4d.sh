@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=tess_s4d
-#SBATCH --partition=orcd_ug_pg_mki_aryeh_all
+#SBATCH --partition=pg_mki_aryeh
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
