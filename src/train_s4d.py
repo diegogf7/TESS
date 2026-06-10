@@ -37,6 +37,9 @@ for epoch in range(EPOCHS):
     all_predictions = []
     all_labels = []
 
+    val_all_predictions = []
+    val_all_labels = []
+
     for batch_idx, (flux, mask, labels) in enumerate(dataloader):
 
         flux = flux.to(DEVICE)
@@ -73,6 +76,44 @@ for epoch in range(EPOCHS):
     print(f"Epoch {epoch+1}/{EPOCHS}, average loss: {average_loss:.6f}, Balanced accuracy: {balanced_accuracy}")
 
     scheduler.step()
+
+    model.eval()
+
+    val_total_loss = 0
+
+    with torch.no_grad():
+
+        for batch_idx, (flux, mask, labels) in enumerate(val_dataloader):
+            flux = flux.to(DEVICE)
+            mask = mask.to(DEVICE)
+            labels = labels.to(DEVICE)
+
+
+            flux = flux.unsqueeze(-1)
+
+
+            #forwards process now
+            
+
+            outputs = model(flux, mask = mask)
+
+            loss = criteria(outputs, labels)
+            val_total_loss += loss.item()
+
+            predictions = outputs.argmax(dim = 1)
+            val_all_predictions.extend(predictions.cpu().numpy())
+            val_all_labels.extend(labels.cpu().numpy())
+
+
+
+            if batch_idx % 10 == 0:
+                print(f"Epoch {epoch+1}/{EPOCHS}, batch {batch_idx}, loss: {loss.item():.6f}")
+            
+    average_loss_val = val_total_loss / len(val_dataloader)
+    balanced_accuracy = balanced_accuracy_score(val_all_labels, val_all_predictions)
+
+    print(f"Epoch {epoch+1}/{EPOCHS}, average loss: {average_loss_val:.6f}, Balanced accuracy: {balanced_accuracy}")
+
 
 
     torch.save(model.state_dict(), '/orcd/scratch/orcd/006/diegogon/checkpoints/s4d_classification.pth')
