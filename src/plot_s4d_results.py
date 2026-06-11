@@ -42,7 +42,7 @@ per_class = confusion_matrix_view.diagonal() / confusion_matrix_view.sum(axis=1)
 
 
 plt.figure(figsize = (10,8))
-sns.heatmap(confusion_matrix_view, annot = True, fmt = 'd', cmpa = 'Greens', xticklabels = CLASSES, yticklabels = CLASSES)
+sns.heatmap(confusion_matrix_view, annot = True, fmt = 'd', cmap = 'Greens', xticklabels = CLASSES, yticklabels = CLASSES)
 plt.xlabel("Predicted")
 plt.ylabel("True")
 plt.title("S4D Confusion Matrix on TESS Stellar variability classes")
