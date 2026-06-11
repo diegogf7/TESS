@@ -65,3 +65,10 @@ class DisentanglementModel(nn.Module):
 def reconstruction_loss(reconstruction, anchor_flux):
     return nn.functional.mse_loss(reconstruction, anchor_flux)
 
+def consistency_loss(x_physics, x_physics_same_star):
+    return nn.functional.mse_loss(x_physics, x_physics_same_star)
+
+def cross_reconstruction_loss(x_physics, x_instrument_same_sector, decoder, anchor_flux):
+    concatenate = torch.cat([x_physics, x_instrument_same_sector], dim = -1)
+    reconstruction = decoder(concatenate)
+    return nn.functional.mse_loss(reconstruction, anchor_flux)
