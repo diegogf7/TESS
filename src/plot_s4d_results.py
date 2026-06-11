@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 from sklearn.metrics import confusion_matrix
+import seaborn as sns
 
 from data import ClassificationDataset
 
@@ -40,11 +41,12 @@ confusion_matrix_view = confusion_matrix(all_labels, all_predictions)
 per_class = confusion_matrix_view.diagonal() / confusion_matrix_view.sum(axis=1)
 
 
-plt.figure(figsize = (10,5))
-plt.bar(CLASSES, per_class * 100)
-plt.ylabel("Accuracy (%)")
-plt.title("Accuracy for S4D on each TESS stellar variable class")
+plt.figure(figsize = (10,8))
+sns.heatmap(confusion_matrix_view, annot = True, fmt = 'd', cmpa = 'Greens', xticklabels = CLASSES, yticklabels = CLASSES)
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.title("S4D Confusion Matrix on TESS Stellar variability classes")
 plt.xticks(rotation = 45, ha = "right")
+plt.yticks(rotation = 0)
 plt.tight_layout()
-plt.savefig('/orcd/scratch/orcd/006/diegogon/plots/s4d_per_class_accuracy.png')
-
+plt.savefig('/orcd/scratch/orcd/006/diegogon/plots/s4d_confusion_matrix.png')

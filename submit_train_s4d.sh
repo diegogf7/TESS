@@ -18,4 +18,4 @@ mkdir -p /orcd/scratch/orcd/006/diegogon/logs
 
 cd /orcd/scratch/orcd/006/diegogon/TESS/src
 
-python train_s4d.py
+python plot_s4d_results.py
