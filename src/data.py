@@ -3,6 +3,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 from scipy.interpolate import interp1d
+import random
 
 '''
 Want to train a transformer
@@ -95,6 +96,71 @@ class ClassificationDataset(Dataset):
 
 
     
+class DisentanglementDataset(Dataset):
+    def __init__(self, parquet, grid_length = 1024):
+        self.df = pd.read_parquet(parquet)
+        self.grid_length = grid_length
+
+
+        #I don't know how to do this properly
+        self.tic_to_indices = {tic: list(indices) for tic, indices in self.df.groupby('TIC').groups.items()}
+
+        self.sector_to_indices = {sector: list(indices) for sector, indices in self.df.groupby('sector').groups.items()}
+
+    def __len__(self):
+        return len(self.df)
+    
+    def load_curve(self, idx):
+
+        row = self.df.iloc[idx]
+        flux = normalize(np.array(row["flux"]))
+        grid_flux, mask = resample_to_grid(np.array(row['time']), flux, self.grid_length)
+        flux_tensor = torch.tensor(grid_flux, dtype = torch.float32)
+        mask_tensor = torch.tensor(mask, dtype = torch.float32)
+        return flux_tensor, mask_tensor
+    
+    def __getitem__(self, idx):
+        anchor_row = self.df.iloc[idx]
+        anchor_tic = anchor_row['TIC']
+        anchor_sector = anchor_row['sector']
+
+        #now we have our TIC and sector 
+        #we need to choose a random index that has a different sector than anchor
+
+        index = self.tic_to_indices[anchor_tic]
+
+        potential_sectors = [i for i in index if self.df.iloc[i]['sector'] != anchor_sector]
+
+        if len(potential_sectors) == 0:
+            new_sector = idx
+        else:
+            new_sector = random.choice(potential_sectors)
+
+
+        sector = self.sector_to_indices[anchor_sector]
+
+
+        potential_TICs = [i for i in sector if self.df.iloc[i]['TIC'] != anchor_tic]
+        
+        if len(potential_TICs) == 0:
+            new_TIC = idx
+        else:
+            new_TIC = random.choice(potential_TICs)
+
+        anchor_flux, anchor_mask = self.load_curve(idx)
+        second_flux, second_mask = self.load_curve(new_sector)
+        second_sector_flux, second_sector_mask = self.load_curve(new_TIC)
+
+        return anchor_flux, anchor_mask, second_flux, second_mask, second_sector_flux, second_sector_mask
+
+        
+
+
+
+        
+
+    
+
 
 
 
