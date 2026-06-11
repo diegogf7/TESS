@@ -59,7 +59,7 @@ class DisentanglementModel(nn.Module):
         concatenate = torch.cat([x_physics, x_instrument], dim= -1)
         decode = self.decoder(concatenate)
 
-        return x_physics, x_instrument, x_physics_same_star, x_instrument_same_sector, decode
+        return decode, x_physics, x_instrument, x_physics_same_star, x_instrument_same_sector
 
 
 def reconstruction_loss(reconstruction, anchor_flux):
