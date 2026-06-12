@@ -40,9 +40,10 @@ with torch.no_grad():
 confusion_matrix_view = confusion_matrix(all_labels, all_predictions)
 per_class = confusion_matrix_view.diagonal() / confusion_matrix_view.sum(axis=1)
 
+confusion_matrix_normalized = confusion_matrix_view / confusion_matrix_view.sum(axis = 1, keepdims = True) * 100
 
 plt.figure(figsize = (10,8))
-sns.heatmap(confusion_matrix_view, annot = True, fmt = 'd', cmap = 'Greens', xticklabels = CLASSES, yticklabels = CLASSES)
+sns.heatmap(confusion_matrix_normalized, annot = True, fmt = '.1f', cmap = 'Greens', xticklabels = CLASSES, yticklabels = CLASSES)
 plt.xlabel("Predicted")
 plt.ylabel("True")
 plt.title("S4D Confusion Matrix on TESS Stellar variability classes")
