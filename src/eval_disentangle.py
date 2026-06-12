@@ -20,7 +20,7 @@ DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classifi
 
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-model = DisentanglementModel()
+model = DisentanglementModel().to(DEVICE)
 model.load_state_dict(torch.load('/orcd/scratch/orcd/006/diegogon/checkpoints/disentangle.pth', map_location=DEVICE))
 model.eval()
 
