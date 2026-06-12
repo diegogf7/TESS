@@ -59,7 +59,7 @@ for epoch in range(EPOCHS):
         reconstruction, x_physics, x_instrument = model(same_star_flux, same_star_mask, same_sector_flux, same_sector_mask)
 
 
-        loss = reconstruction_loss(reconstruction, anchor_flux.squeeze)
+        loss = reconstruction_loss(reconstruction, anchor_flux)
 
         loss.backward()
         optimizer.step()
