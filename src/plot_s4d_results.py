@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import confusion_matrix
 import seaborn as sns
 
+
 from data import ClassificationDataset
 
 from s4d import S4Model
@@ -16,7 +17,7 @@ model = S4Model(d_input = 1, d_output = 8, d_model = 256, n_layers = 4, dropout 
 model.load_state_dict(torch.load('/orcd/scratch/orcd/006/diegogon/checkpoints/s4d_classification.pth', map_location=DEVICE))
 
 model.eval()
-val_dataset = ClassificationDataset('/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val.parquet')
+val_dataset = ClassificationDataset('/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_test.parquet')
 
 val_loader = DataLoader(val_dataset, batch_size=256, shuffle=False, num_workers=4)
 

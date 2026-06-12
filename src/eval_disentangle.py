@@ -15,7 +15,7 @@ from sklearn.linear_model import LogisticRegression
 
 BATCH_SIZE = 256
 EPOCHS = 100
-VAL_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val.parquet"
+TEST_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_test.parquet"
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train.parquet"
 
 
@@ -26,7 +26,7 @@ model.eval()
 
 dataset = ClassificationDataset(DATA_PATH, grid_length = 1024)
 
-val_dataset = ClassificationDataset(VAL_PATH, grid_length = 1024)
+val_dataset = ClassificationDataset(TEST_PATH, grid_length = 1024)
 
 val_dataloader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True, num_workers=4)
 train_dataloader = DataLoader(dataset, batch_size = BATCH_SIZE, shuffle = True, num_workers = 4)
