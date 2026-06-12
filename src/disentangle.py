@@ -43,32 +43,18 @@ class DisentanglementModel(nn.Module):
         self.instrument_encoder = InstrumentEncoder(d_model, n_layers, dropout)
         self.decoder = Pair_Decoder()
 
-    def forward(self, anchor, anchor_mask, same_star, same_star_mask, same_sector, same_sector_mask):
-        #For all three pairs
-        #1. encode 2. decode 3. return latents and reconstructions
+    def forward(self, same_star, same_star_mask, same_sector, same_sector_mask):
+        #For the physics side we are examining the same star as the anchor but at a different sector
+        #on the instrument side we are examining a different star in the same sector as the achor
+        x_physics = self.physics_encoder(same_star, same_star_mask)
 
-        #we need x_physics, x_instrument then we need x_physics_same_star adn x_instrument_same sector
+        x_instrument = self.instrument_encoder(same_sector, same_sector_mask)
 
-        x_physics = self.physics_encoder(anchor, anchor_mask)
-        x_instrument = self.instrument_encoder(anchor, anchor_mask)
-
-        x_physics_same_star = self.physics_encoder(same_star, same_star_mask)
-
-        x_instrument_same_sector = self.instrument_encoder(same_sector, same_sector_mask)
-
-        concatenate = torch.cat([x_physics, x_instrument], dim= -1)
+        concatenate = torch.cat([x_physics, x_instrument], dim = -1)
         decode = self.decoder(concatenate)
+        return decode, x_physics, x_instrument
 
-        return decode, x_physics, x_instrument, x_physics_same_star, x_instrument_same_sector
-
+        
 
 def reconstruction_loss(reconstruction, anchor_flux):
-    return nn.functional.mse_loss(reconstruction, anchor_flux)
-
-def consistency_loss(x_physics, x_physics_same_star):
-    return nn.functional.mse_loss(x_physics, x_physics_same_star)
-
-def cross_reconstruction_loss(x_physics, x_instrument_same_sector, decoder, anchor_flux):
-    concatenate = torch.cat([x_physics, x_instrument_same_sector], dim = -1)
-    reconstruction = decoder(concatenate)
     return nn.functional.mse_loss(reconstruction, anchor_flux)

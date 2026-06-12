@@ -107,6 +107,9 @@ class DisentanglementDataset(Dataset):
 
         self.sector_to_indices = {sector: list(indices) for sector, indices in self.df.groupby('sector').groups.items()}
 
+        self.tics = self.df['TIC'].to_numpy()
+        self.sectors = self.df['sector'].to_numpy()
+
     def __len__(self):
         return len(self.df)
     
@@ -129,7 +132,7 @@ class DisentanglementDataset(Dataset):
 
         index = self.tic_to_indices[anchor_tic]
 
-        potential_sectors = [i for i in index if self.df.iloc[i]['sector'] != anchor_sector]
+        potential_sectors = [i for i in index if self.sectors[i] != anchor_sector]
 
         if len(potential_sectors) == 0:
             new_sector = idx
@@ -138,10 +141,8 @@ class DisentanglementDataset(Dataset):
 
 
         sector = self.sector_to_indices[anchor_sector]
+        potential_TICs = [i for i in sector if self.tics[i] != anchor_tic]
 
-
-        potential_TICs = [i for i in sector if self.df.iloc[i]['TIC'] != anchor_tic]
-        
         if len(potential_TICs) == 0:
             new_TIC = idx
         else:
@@ -152,9 +153,6 @@ class DisentanglementDataset(Dataset):
         second_sector_flux, second_sector_mask = self.load_curve(new_TIC)
 
         return anchor_flux, anchor_mask, second_flux, second_mask, second_sector_flux, second_sector_mask
-
-        
-
 
 
         

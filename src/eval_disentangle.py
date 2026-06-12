@@ -6,7 +6,7 @@ from data import normalize, resample_to_grid, LightCurveDataset
 from model import masking_autoencoder
 from data import DisentanglementDataset, ClassificationDataset
 from torch.utils.data import DataLoader
-from disentangle import reconstruction_loss, consistency_loss, cross_reconstruction_loss, DisentanglementModel
+from disentangle import DisentanglementModel, reconstruction_loss
 from sklearn.metrics import balanced_accuracy_score
 
 from sklearn.linear_model import LogisticRegression

@@ -4,9 +4,11 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import balanced_accuracy_score
 import numpy as np
 
+
 from data import LightCurveDataset, ClassificationDataset, DisentanglementDataset
 from s4d import S4Model
-from disentangle import DisentanglementModel, reconstruction_loss, consistency_loss, cross_reconstruction_loss
+from disentangle import DisentanglementModel, reconstruction_loss
+
 
 BATCH_SIZE = 256
 EPOCHS = 100
@@ -45,7 +47,7 @@ for epoch in range(EPOCHS):
         same_sector_flux = same_sector_flux.to(DEVICE)
         same_sector_mask = same_sector_mask.to(DEVICE)
 
-        anchor_flux = anchor_flux.unsqueeze(-1)
+        
         same_star_flux = same_star_flux.unsqueeze(-1)
         same_sector_flux = same_sector_flux.unsqueeze(-1)
 
@@ -54,9 +56,10 @@ for epoch in range(EPOCHS):
         #forwards process now
         
 
-        reconstruction, x_physics, x_instruments, x_physics_same_star, x_instrument_same_sector = model(anchor_flux, anchor_mask, same_star_flux, same_star_mask, same_sector_flux, same_sector_mask)
+        reconstruction, x_physics, x_instrument = model(same_star_flux, same_star_mask, same_sector_flux, same_sector_mask)
 
-        loss = reconstruction_loss(reconstruction, anchor_flux.squeeze(-1)) + consistency_loss(x_physics, x_physics_same_star) + cross_reconstruction_loss(x_physics, x_instrument_same_sector, model.decoder, anchor_flux.squeeze(-1))
+
+        loss = reconstruction_loss(reconstruction, anchor_flux.squeeze)
 
         loss.backward()
         optimizer.step()
@@ -86,7 +89,7 @@ for epoch in range(EPOCHS):
             same_sector_flux = same_sector_flux.to(DEVICE)
             same_sector_mask = same_sector_mask.to(DEVICE)
 
-            anchor_flux = anchor_flux.unsqueeze(-1)
+            
             same_star_flux = same_star_flux.unsqueeze(-1)
             same_sector_flux = same_sector_flux.unsqueeze(-1)
 
@@ -94,9 +97,9 @@ for epoch in range(EPOCHS):
             #forwards process now
             
 
-            reconstruction, x_physics, x_instruments, x_physics_same_star, x_instrument_same_sector = model(anchor_flux, anchor_mask, same_star_flux, same_star_mask, same_sector_flux, same_sector_mask)
+            reconstruction, x_physics, x_instrument = model(same_star_flux, same_star_mask, same_sector_flux, same_sector_mask)
 
-            loss = reconstruction_loss(reconstruction, anchor_flux.squeeze(-1)) + consistency_loss(x_physics, x_physics_same_star) + cross_reconstruction_loss(x_physics, x_instrument_same_sector, model.decoder, anchor_flux.squeeze(-1))
+            loss = reconstruction_loss(reconstruction, anchor_flux)
 
             val_total_loss += loss.item()
 
