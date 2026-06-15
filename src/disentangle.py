@@ -8,7 +8,7 @@ from s4d import S4Model
 class PhysicsEncoder(nn.Module):
     def __init__(self, d_model = 256, n_layers= 4, dropout = 0.2):
         super().__init__()
-        self.model = S4Model(d_input = 1, d_output = 64, d_model = d_model, n_layers = n_layers, dropout = dropout)
+        self.model = S4Model(d_input = 1, d_model = d_model, n_layers = n_layers, dropout = dropout, n_tokens = 16, token_dim = 4)
 
     def forward(self, x, mask = None):
         x = self.model.forward(x, mask)
@@ -17,7 +17,7 @@ class PhysicsEncoder(nn.Module):
 class InstrumentEncoder(nn.Module):
     def __init__(self, d_model = 256, n_layers = 4, dropout = 0.2):
         super().__init__()
-        self.model = S4Model(d_input = 1, d_output = 16, d_model = d_model, n_layers = n_layers, dropout = dropout)
+        self.model = S4Model(d_input = 1, d_model = d_model, n_layers = n_layers, dropout = dropout, n_tokens = 4, token_dim = 4)
 
     def forward(self, x, mask = None):
         x = self.model.forward(x, mask)
@@ -37,32 +37,56 @@ class Pair_Decoder(nn.Module):
         return x
     
 
+
+
 class Velocity_Net(nn.Module):
-    def __init__(self, length = 1024, concatenate_dim = 80, hidden = 512, t_dim = 64):
+
+    def __init__(self, length = 1024, patch_size = 16, token_dim = 4, d = 128, n_heads = 4, t_dim = 64):
         super().__init__()
+
+        self.patch_size = patch_size
+        self.num_patches = length // patch_size
 
         self.t_embed = nn.Sequential(
             nn.Linear(1, t_dim),
             nn.SiLU(),
-            nn.Linear(t_dim, t_dim),
-
+            nn.Linear(t_dim, d)
         )
 
-        self.net = nn.Sequential(
-            nn.Linear(length + t_dim + concatenate_dim, hidden),
-            nn.SiLU(),
-            nn.Linear(hidden, hidden),
-            nn.SiLU(),
-            nn.Linear(hidden, length),
+        self.patch_projection = nn.Linear(patch_size, d)
+        self.position = nn.Parameter(torch.randn(1, self.num_patches, d) * 0.02)
 
-        )
-    
-    def forward(self, xt, t, concatenate):
-        t_emb = self.t_embed(t)
-        h = torch.cat([xt, t_emb, concatenate], dim = -1)
+        self.context_projection = nn.Linear(token_dim, d)
 
-        return self.net(h)
+        self.norm_sa = nn.LayerNorm(d)
+        self.self_attention = nn.MultiheadAttention(d, n_heads, batch_first = True)
 
+        self.norm_q = nn.LayerNorm(d)
+        self.norm_kv = nn.LayerNorm(d)
+        self.cross_attention = nn.MultiheadAttention(d, n_heads, batch_first = True)
+
+        self.norm_ff = nn.LayerNorm(d)
+        self.ff = nn.Sequential(nn.Linear(d, 4 * d), nn.SiLU(), nn.Linear(4*d, d))
+        
+        self.out_projection = nn.Linear(d, patch_size)
+
+    def forward(self, xt, t, context):
+        B, L = xt.shape
+
+        q = xt.reshape(B, self.num_patches, self.patch_size)
+        q = self.patch_projection(q) + self.position
+        q = q + self.t_embed(t).unsqueeze(1)
+
+        kv = self.context_projection(context)
+
+        s = self.norm_sa(q)
+        q = q + self.self_attention(s,s,s)[0]
+
+        q = q + self.cross_attention(self.norm_q(q), self.norm_kv(kv), self.norm_kv(kv))[0]
+        q = q + self.ff(self.norm_ff(q))
+
+        v = self.out_projection(q).reshape(B, L)
+        return v
 
 
 class DisentanglementModel(nn.Module):
@@ -70,7 +94,7 @@ class DisentanglementModel(nn.Module):
         super().__init__()
         self.physics_encoder = PhysicsEncoder(d_model, n_layers, dropout)
         self.instrument_encoder = InstrumentEncoder(d_model, n_layers, dropout)
-        self.velocity_net = Velocity_Net(length = 1024, concatenate_dim = 80)
+        self.velocity_net = Velocity_Net(length = 1024, token_dim = 4)
 
     def forward(self, same_star, same_star_mask, same_sector, same_sector_mask):
         #For the physics side we are examining the same star as the anchor but at a different sector

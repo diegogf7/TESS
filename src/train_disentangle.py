@@ -48,7 +48,7 @@ val_dataloader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True
 
 model = DisentanglementModel(256, 4, 0.2).to(DEVICE)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr = 0.001)
+optimizer = torch.optim.AdamW(model.parameters(), lr =0.001)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = EPOCHS)
 
 
@@ -81,7 +81,7 @@ for epoch in range(EPOCHS):
         
 
         x_physics, x_instrument = model(same_star_flux, same_star_mask, same_sector_flux, same_sector_mask)
-        concatenate = torch.cat([x_physics, x_instrument], dim = -1)
+        concatenate = torch.cat([x_physics, x_instrument], dim = 1)
 
         loss = flow_matching_loss(model.velocity_net, anchor_flux, concatenate)
 
@@ -123,7 +123,7 @@ for epoch in range(EPOCHS):
 
             x_physics, x_instrument = model(same_star_flux, same_star_mask, same_sector_flux, same_sector_mask)
 
-            concatenate = torch.cat([x_physics, x_instrument], dim=-1)
+            concatenate = torch.cat([x_physics, x_instrument], dim=1)
 
             loss = flow_matching_loss(model.velocity_net, anchor_flux, concatenate)
 
