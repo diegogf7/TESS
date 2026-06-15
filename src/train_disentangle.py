@@ -7,7 +7,7 @@ import numpy as np
 
 from data import LightCurveDataset, ClassificationDataset, DisentanglementDataset
 from s4d import S4Model
-from disentangle import DisentanglementModel, flow_matching_loss
+from disentangle import DisentanglementModel, flow_matching_loss, info_nce
 
 def random_mask(flux, mask, mask_ratio = 0.3, random_ratio = 0.1, true_ratio = 0.1):
 
@@ -83,7 +83,11 @@ for epoch in range(EPOCHS):
         x_physics, x_instrument = model(same_star_flux, same_star_mask, same_sector_flux, same_sector_mask)
         concatenate = torch.cat([x_physics, x_instrument], dim = 1)
 
-        loss = flow_matching_loss(model.velocity_net, anchor_flux, concatenate)
+        z_phys_view = x_physics.flatten(1)
+        z_phys_anchor = model.physics_encoder(anchor_flux.unsqueeze(-1), anchor_mask).flatten(1)
+        contrastive = info_nce(z_phys_anchor, z_phys_view)
+
+        loss = contrastive
 
         loss.backward()
         optimizer.step()

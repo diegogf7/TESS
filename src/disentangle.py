@@ -120,6 +120,14 @@ def flow_matching_loss(velocity_net, x1, concatenate):
     return nn.functional.mse_loss(prediction_velocity, target_velocity)
 
 
+def info_nce(z_a, z_b, temperature = 0.2):
+    z_a = nn.functional.normalize(z_a, dim = 1)
+    z_b = nn.functional.normalize(z_b, dim = 1)
+    logits = z_a @ z_b.t() / temperature
+
+    labels = torch.arange(z_a.shape[0], device = z_a.device)
+    return 0.5 * (nn.functional.cross_entropy(logits, labels) + nn.functional.cross_entropy(logits.t(), labels))
+
 
     
     
