@@ -10,6 +10,7 @@ from disentangle import DisentanglementModel, flow_matching_loss
 from sklearn.metrics import balanced_accuracy_score
 
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 
 
@@ -68,7 +69,10 @@ val_latents = np.concatenate(val_latents)
 val_labels = np.concatenate(val_labels)
 
 
-viewing_classifier = LogisticRegression(max_iter = 1000)
+scaler = StandardScaler()
+train_latents = scaler.fit_transform(train_latents)
+val_latents = scaler.transform(val_latents)
+viewing_classifier = LogisticRegression(max_iter = 5000)
 viewing_classifier.fit(train_latents, train_labels)
 predictions = viewing_classifier.predict(val_latents)
 print(f"Balanced accuracy score: {balanced_accuracy_score(val_labels, predictions)}")
