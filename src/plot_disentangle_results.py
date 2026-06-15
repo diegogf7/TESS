@@ -36,6 +36,8 @@ def extract_latents(loader):
             mask = mask.to(DEVICE)
 
             z_physics = model.physics_encoder(flux, mask)
+            z_physics = z_physics.reshape(z_physics.shape[0], -1) #reducing one dimension
+
 
             latents.append(z_physics.cpu().numpy())
             all_labels.append(labels.numpy())

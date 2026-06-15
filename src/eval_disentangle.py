@@ -6,7 +6,7 @@ from data import normalize, resample_to_grid, LightCurveDataset
 from model import masking_autoencoder
 from data import DisentanglementDataset, ClassificationDataset
 from torch.utils.data import DataLoader
-from disentangle import DisentanglementModel, reconstruction_loss
+from disentangle import DisentanglementModel, flow_matching_loss
 from sklearn.metrics import balanced_accuracy_score
 
 from sklearn.linear_model import LogisticRegression
@@ -41,6 +41,7 @@ with torch.no_grad():
         mask = mask.to(DEVICE)
 
         z_physics = model.physics_encoder(flux, mask)
+        z_physics = z_physics.reshape(z_physics.shape[0], -1) #reducing one dimension
 
         train_latents.append(z_physics.cpu().numpy())
         train_labels.append(labels.numpy())
@@ -57,6 +58,8 @@ with torch.no_grad():
         mask = mask.to(DEVICE)
 
         z_physics = model.physics_encoder(flux, mask)
+        z_physics = z_physics.reshape(z_physics.shape[0], -1) #reducing one dimension
+
 
         val_latents.append(z_physics.cpu().numpy())
         val_labels.append(labels.numpy())

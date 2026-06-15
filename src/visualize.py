@@ -14,7 +14,7 @@ model.eval()
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/tess_classification.parquet"
 df = pd.read_parquet(DATA_PATH)
 #getting the first instance of the eclipse data just to plot it for fun
-eclipse = df[df['label'] == 'DSCT_BCEP'].iloc[0]
+eclipse = df[df['label'] == 'ECLIPSE'].iloc[0]
 time = np.array(eclipse['time'])
 flux = np.array(eclipse['flux'])
 flux_normalized = normalize(flux)
@@ -46,7 +46,7 @@ plt.plot(x, reconstruction, label='Reconstruction', color='red', alpha=0.7)
 for idx in masked_patch_indexes:
     plt.axvspan(idx*16, (idx+1)*16, alpha=0.1, color='gray')
 
-plt.title("DSCT_BCEP Light Curve — MAE Reconstruction")
+plt.title("ECLIPSE Light Curve — MAE Reconstruction")
 plt.xlabel("Time Steps")
 plt.ylabel("Normalized Flux")
 plt.legend()
