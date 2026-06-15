@@ -9,6 +9,27 @@ from data import LightCurveDataset, ClassificationDataset, DisentanglementDatase
 from s4d import S4Model
 from disentangle import DisentanglementModel, reconstruction_loss
 
+def random_mask(flux, mask, mask_ratio = 0.3, random_ratio = 0.1, true_ratio = 0.1):
+
+
+    #we have to do different baskets for the masking
+    
+    first_bucket = torch.rand(mask.shape, device = mask.device)
+
+    masked = first_bucket < mask_ratio
+    random_part = (first_bucket >= mask_ratio) & (first_bucket < mask_ratio + random_ratio) #excluding it at the end
+
+    new_flux = flux.clone()
+    new_flux[masked] = 0.0
+    new_flux[random_part] = torch.rand_like(new_flux[random_part])
+
+    new_mask = mask.clone()
+    new_mask[masked] = 0.0
+
+    return new_flux, new_mask
+
+
+
 
 BATCH_SIZE = 256
 EPOCHS = 100
@@ -50,6 +71,9 @@ for epoch in range(EPOCHS):
         
         same_star_flux = same_star_flux.unsqueeze(-1)
         same_sector_flux = same_sector_flux.unsqueeze(-1)
+
+        same_star_flux, same_star_mask = random_mask(same_star_flux, same_star_mask, mask_ratio = 0.3, random_ratio = 0.1, true_ratio = 0.1)
+        same_sector_flux, same_sector_mask = random_mask(same_sector_flux, same_sector_mask, mask_ratio = 0.3, random_ratio = 0.1, true_ratio = 0.1)
 
         optimizer.zero_grad()
 
@@ -112,6 +136,4 @@ for epoch in range(EPOCHS):
 
 
     torch.save(model.state_dict(), '/orcd/scratch/orcd/006/diegogon/checkpoints/disentangle.pth')
-
-
 
