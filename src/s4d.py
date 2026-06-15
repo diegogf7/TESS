@@ -139,7 +139,9 @@ class S4Model(nn.Module):
             prenorm = False,
             lr = None,
             dt_min = 0.001,
-            dt_max = 0.1
+            dt_max = 0.1,
+            n_tokens = 4,
+            token_dim = 16
     ):
         
         super().__init__()
@@ -160,7 +162,10 @@ class S4Model(nn.Module):
             self.norms.append(nn.LayerNorm(d_model))
             self.dropouts.append(DropoutNd(dropout))
 
-        self.decoder = nn.Linear(d_model, d_output)
+        
+
+        self.n_tokens = n_tokens
+        self.decoder = nn.Linear(d_model, token_dim)
 
     def forward(self, x, mask = None):
         #not sure how to implement this properly
@@ -182,14 +187,22 @@ class S4Model(nn.Module):
             if not self.prenorm:
                 x = norm(x.transpose(-1, -2)).transpose(-1,-2)
         
-        x = x.transpose(-1, -2)
-        if mask is not None:
-            mask_f = mask.unsqueeze(-1).float()
-            x = (x * mask_f).sum(dim =1) / mask_f.sum(dim = 1).clamp(min = 1)
-        else:
-            x = x.mean(dim = 1)
+        x = x.transpose(-1,-2)
 
-        x = self.decoder(x)
-        return x
+        B, L, D = x.shape
+        N = self.n_tokens
+
+        x = x.reshape(B, N, L // N, D)
+
+        if mask is not None:
+            mask_f = mask.reshape(B, N, L // N, 1).to(x.dtype)
+
+            x = (x * mask_f).sum(dim = 2) / mask_f.sum(dim = 2).clamp(min = 1)
+        else:
+
+            x = x.mean(dim = 2)
+
+        tokens = self.decoder(x)
+        return tokens
 
         
