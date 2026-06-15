@@ -35,13 +35,42 @@ class Pair_Decoder(nn.Module):
         x = self.layer2(x)
 
         return x
+    
+
+class Velocity_Net(nn.Module):
+    def __init__(self, length = 1024, concatenate_dim = 80, hidden = 512, t_dim = 64):
+        super().__init__()
+
+        self.t_embed = nn.Sequential(
+            nn.Linear(1, t_dim),
+            nn.SiLU(),
+            nn.Linear(t_dim, t_dim),
+
+        )
+
+        self.net = nn.Sequential(
+            nn.Linear(length + t_dim + concatenate_dim, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, length),
+
+        )
+    
+    def forward(self, xt, t, concatenate):
+        t_emb = self.t_embed(t)
+        h = torch.cat([xt, t_emb, concatenate], dim = -1)
+
+        return self.net(h)
+
+
 
 class DisentanglementModel(nn.Module):
     def __init__(self, d_model = 256, n_layers = 4, dropout = 0.2):
         super().__init__()
         self.physics_encoder = PhysicsEncoder(d_model, n_layers, dropout)
         self.instrument_encoder = InstrumentEncoder(d_model, n_layers, dropout)
-        self.decoder = Pair_Decoder()
+        self.velocity_net = Velocity_Net(length = 1024, concatenate_dim = 80)
 
     def forward(self, same_star, same_star_mask, same_sector, same_sector_mask):
         #For the physics side we are examining the same star as the anchor but at a different sector
@@ -50,11 +79,24 @@ class DisentanglementModel(nn.Module):
 
         x_instrument = self.instrument_encoder(same_sector, same_sector_mask)
 
-        concatenate = torch.cat([x_physics, x_instrument], dim = -1)
-        decode = self.decoder(concatenate)
-        return decode, x_physics, x_instrument
+        return x_physics, x_instrument
 
         
 
-def reconstruction_loss(reconstruction, anchor_flux):
-    return nn.functional.mse_loss(reconstruction, anchor_flux)
+def flow_matching_loss(velocity_net, x1, concatenate):
+    #x1 is the anchor_flux and concatenate is the concatenation of our latent spaces
+
+    x0 = torch.randn_like(x1)
+    t = torch.rand(x1.shape[0], 1, device = x1.device)
+
+    xt = (1 - t) * x0 + (t * x1) #to the straight noise and data path
+    target_velocity = x1 - x0
+
+    prediction_velocity = velocity_net(xt, t, concatenate)
+    return nn.functional.mse_loss(prediction_velocity, target_velocity)
+
+
+
+    
+    
+    #return nn.functional.mse_loss(reconstruction, anchor_flux)
