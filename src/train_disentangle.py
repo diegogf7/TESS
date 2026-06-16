@@ -127,7 +127,7 @@ for epoch in range(EPOCHS):
 
             concatenate = torch.cat([x_physics, x_instrument], dim=1)
 
-            loss = flow_matching_loss(model.velocity_net, anchor_flux, concatenate)
+            loss = contrastive_flow_matching_loss(model.velocity_net, anchor_flux, concatenate)
 
             val_total_loss += loss.item()
 

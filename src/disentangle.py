@@ -135,7 +135,7 @@ def info_nce(z_a, z_b, temperature = 0.2):
 
 
 def contrastive_flow_matching_loss(velocity_net, x1, concatenate, lam = 0.05):
-    x0 = torch.rand(x1.shape[0], 1, device = x1.device)
+    x0 = torch.randn_like(x1)
 
     t = torch.rand(x1.shape[0], 1, device = x1.device)
 
@@ -143,7 +143,7 @@ def contrastive_flow_matching_loss(velocity_net, x1, concatenate, lam = 0.05):
     target_velocity = x1 - x0
 
     permutation = torch.randperm(x1.shape[0], device = x1.device)
-    
+
     negative_velocity = target_velocity[permutation]
 
     prediction_velocity = velocity_net(xt, t, concatenate)
