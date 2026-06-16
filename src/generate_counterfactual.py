@@ -26,7 +26,7 @@ fluxA = fluxA.unsqueeze(0).to(DEVICE)
 maskA = maskA.unsqueeze(0).to(DEVICE)
 
 fluxB = fluxB.unsqueeze(0).to(DEVICE)
-maskB = fluxB.unsqueeze(0).to(DEVICE)
+maskB = maskB.unsqueeze(0).to(DEVICE)
 
 @torch.no_grad() #need to encode all of the physics and instrument latents
 def encode(flux, mask):
@@ -54,4 +54,23 @@ def sample(z_physics, z_instrument, steps = 100):
     
     return x.squeeze(0).cpu().numpy()
 
-#
+#need to swap grid
+
+generate_AA = sample(z_physics_A, z_instrument_A)
+generate_AB = sample(z_physics_A, z_instrument_B)
+
+generate_BB = sample(z_physics_B, z_instrument_B)
+generate_BA = sample(z_physics_B, z_instrument_A)
+
+figure, axis = plt.subplots(3, 2, figsize = (12, 8))
+
+axis[0,0].plot(fluxA.squeeze(0).cpu()); axis[0,0].set_title("Original A")
+axis[0,1].plot(fluxB.squeeze(0).cpu()); axis[0,1].set_title("Original B")
+
+axis[1,0].plot(generate_AA); axis[1,0].set_title("Physics A + Instrument A (to rebuild A)")
+axis[1,1].plot(generate_AB); axis[1,1].set_title("Physics A + Instrument B (to build counterfactual)")
+axis[2,0].plot(generate_BB); axis[2,0].set_title("Physics B + Instrument B (to rebuild B)")
+axis[2,1].plot(generate_BA); axis[2,1].set_title("Physics B + Instrument A (to build counterfactual)")
+plt.tight_layout()
+plt.savefig(OUT_PATH, dpi = 120)
+print(f"Saved figure to {OUT_PATH}")
