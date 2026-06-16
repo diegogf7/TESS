@@ -132,3 +132,23 @@ def info_nce(z_a, z_b, temperature = 0.2):
     
     
     #return nn.functional.mse_loss(reconstruction, anchor_flux)
+
+
+def contrastive_flow_matching_loss(velocity_net, x1, concatenate, lam = 0.05):
+    x0 = torch.rand(x1.shape[0], 1, device = x1.device)
+
+    t = torch.rand(x1.shape[0], 1, device = x1.device)
+
+    xt = (1 - t) * x0 + t * x1
+    target_velocity = x1 - x0
+
+    permutation = torch.randperm(x1.shape[0], device = x1.device)
+    
+    negative_velocity = target_velocity[permutation]
+
+    prediction_velocity = velocity_net(xt, t, concatenate)
+    positive = nn.functional.mse_loss(prediction_velocity, target_velocity)
+    negative = nn.functional.mse_loss(prediction_velocity, negative_velocity)
+    
+    return positive - (lam * negative)
+    
