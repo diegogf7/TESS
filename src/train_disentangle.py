@@ -87,7 +87,7 @@ for epoch in range(EPOCHS):
         z_phys_anchor = model.physics_encoder(anchor_flux.unsqueeze(-1), anchor_mask).flatten(1)
         contrastive = info_nce(z_phys_anchor, z_phys_view)
 
-        loss = contrastive + 0.2 * flow_matching_loss(model.velocity_net, anchor_flux, concatenate)
+        loss = (0.2 * contrastive) + flow_matching_loss(model.velocity_net, anchor_flux, concatenate)
 
         loss.backward()
         optimizer.step()
