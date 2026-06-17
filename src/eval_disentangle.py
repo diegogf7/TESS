@@ -16,13 +16,13 @@ from sklearn.preprocessing import StandardScaler
 
 BATCH_SIZE = 256
 EPOCHS = 100
-TEST_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_test.parquet"
-DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train.parquet"
+TEST_PATH  = "/work1/jeroenaudenaert/diegogon/phyts/TESS/TESS/split/tess_classification_test.parquet"
+DATA_PATH = "/work1/jeroenaudenaert/diegogon/phyts/TESS/TESS/split/tess_classification_train.parquet"
 
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = DisentanglementModel().to(DEVICE)
-model.load_state_dict(torch.load('/orcd/scratch/orcd/006/diegogon/checkpoints/disentangle.pth', map_location=DEVICE))
+model.load_state_dict(torch.load('/work1/jeroenaudenaert/diegogon/checkpoints/disentangle.pth', map_location=DEVICE))
 model.eval()
 
 dataset = ClassificationDataset(DATA_PATH, grid_length = 1024)
