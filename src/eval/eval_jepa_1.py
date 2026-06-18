@@ -17,8 +17,9 @@ from src.models.jepa_1 import JEPA_1
 
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-DATA_PATH = "/work1/jeroenaudenaert/diegogon/phyts/TESS/TESS/split/tess_classification_train.parquet"
-CHECKPOINT = "/work1/jeroenaudenaert/diegogon/checkpoints/training_jepa1.pth"
+DATA_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train.parquet"
+CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/training_jepa1.pth"
+
 BATCH_SIZE = 256
 
 model = JEPA_1(256, 4, 0.2, 0.996).to(DEVICE)
