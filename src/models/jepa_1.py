@@ -68,7 +68,8 @@ class JEPA_1(nn.Module):
 
 
 
-    
+def jepa_loss(prediction, z_target):
+    prediction = nn.functional.normalize(prediction, dim = -1)
+    z_target = nn.functional.normalize(z_target, dim = -1)
 
-        
-
+    return nn.functional.mse_loss(prediction, z_target)
