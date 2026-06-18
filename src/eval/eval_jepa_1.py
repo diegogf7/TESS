@@ -51,7 +51,18 @@ online_latents = np.concatenate(online_latents)
 target_latents = np.concatenate(target_latents)
 all_sectors = np.concatenate(all_sectors)
 
+
+unique, counts = np.unique(all_sectors, return_counts=True)
+keep_sectors = unique[counts >= 2]
+mask = np.isin(all_sectors, keep_sectors)
+
+target_latents = target_latents[mask]
+online_latents = online_latents[mask]
+all_sectors = all_sectors[mask]
+
 X_train, X_test, y_train, y_test = train_test_split(target_latents, all_sectors, test_size =0.2, stratify = all_sectors, random_state = 0)
+
+
 
 scaler = StandardScaler()
 X_train = scaler.fit_transform(X_train)
