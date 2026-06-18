@@ -154,10 +154,29 @@ class DisentanglementDataset(Dataset):
 
         return anchor_flux, anchor_mask, second_flux, second_mask, second_sector_flux, second_sector_mask
 
-
-        
-
+class SectorDataset(Dataset):
+    def __init__(self, parquet, grid_length = 1024):
+        self.df = pd.read_parquet(parquet)
+        self.grid_length = grid_length
     
+
+    def __len__(self):
+        return len(self.df)
+    
+    def __getitem__(self, idx):
+        row = self.df.iloc[idx]
+        time = np.array(row["time"])
+
+        flux = normalize(np.array(row["flux"]))
+        grid_flux, observed = resample_to_grid(time, flux, self.grid_length)
+
+        grid_flux = torch.tensor(grid_flux, dtype = torch.float32)
+        observed = torch.tensor(observed, dtype = torch.float32)
+
+        sector = torch.tensor(int(row["sector"])) #
+        
+        return grid_flux, observed, sector 
+        
 
 
 
@@ -170,4 +189,3 @@ if __name__ == "__main__":
     flux, mask = ds[0]
     print(f"Flux shape: {flux.shape}, dtype: {flux.dtype}")
     print(f"Mask shape: {mask.shape}, sum: {mask.sum()}")
-
