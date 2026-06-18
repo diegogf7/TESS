@@ -16,6 +16,6 @@ conda activate lightcurve
 mkdir -p /orcd/scratch/orcd/006/diegogon/checkpoints
 mkdir -p /orcd/scratch/orcd/006/diegogon/logs
 
-cd /orcd/scratch/orcd/006/diegogon/TESS/src
+cd /orcd/scratch/orcd/006/diegogon/TESS
 
-python plot_s4d_results.py
+python -m src.plots.plot_s4d_results

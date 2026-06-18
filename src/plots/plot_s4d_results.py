@@ -6,9 +6,9 @@ from sklearn.metrics import confusion_matrix
 import seaborn as sns
 
 
-from data import ClassificationDataset
+from src.data.data import ClassificationDataset
 
-from s4d import S4Model
+from src.models.s4d import S4Model
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 CLASSES = ['APERIODIC', 'CONTACT_ROT', 'DSCT_BCEP', 'ECLIPSE','GDOR_SPB', 'INSTRUMENT/JUNK', 'RRLYR_CEPH', 'SOLARLIKE']

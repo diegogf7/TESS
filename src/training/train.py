@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from data import LightCurveDataset
-from model import masking_autoencoder
+from src.data.data import LightCurveDataset
+from src.models.model import masking_autoencoder
 
 
 #global variables

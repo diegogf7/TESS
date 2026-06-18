@@ -4,8 +4,8 @@ from torch.utils.data import DataLoader
 from sklearn.metrics import balanced_accuracy_score
 import numpy as np
 
-from data import LightCurveDataset, ClassificationDataset
-from s4d import S4Model
+from src.data.data import LightCurveDataset, ClassificationDataset
+from src.models.s4d import S4Model
 
 BATCH_SIZE = 256
 EPOCHS = 100

@@ -4,8 +4,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from data import ClassificationDataset
-from disentangle import DisentanglementModel
+from src.data.data import ClassificationDataset
+from src.models.disentangle import DisentanglementModel
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

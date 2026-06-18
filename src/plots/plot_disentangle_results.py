@@ -8,8 +8,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
 
-from data import ClassificationDataset
-from disentangle import DisentanglementModel
+from src.data.data import ClassificationDataset
+from src.models.disentangle import DisentanglementModel
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 CLASSES = ['APERIODIC', 'CONTACT_ROT', 'DSCT_BCEP', 'ECLIPSE','GDOR_SPB', 'INSTRUMENT/JUNK', 'RRLYR_CEPH', 'SOLARLIKE']

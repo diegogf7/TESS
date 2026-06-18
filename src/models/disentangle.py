@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from s4d import S4Model
+from src.models.s4d import S4Model
 
 
 #going to define our physics model and then our instrument model

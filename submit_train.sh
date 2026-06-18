@@ -16,6 +16,6 @@ conda activate lightcurve
 mkdir -p /orcd/scratch/orcd/006/diegogon/checkpoints
 mkdir -p /orcd/scratch/orcd/006/diegogon/logs
 
-cd /orcd/scratch/orcd/006/diegogon/TESS/src
+cd /orcd/scratch/orcd/006/diegogon/TESS
 
-python train.py
+python -m src.training.train

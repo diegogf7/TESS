@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 from einops import repeat
 
-from functions.dropout import DropoutNd
+from src.models.dropout import DropoutNd
 
 
 '''

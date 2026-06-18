@@ -2,8 +2,8 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from data import normalize, resample_to_grid, LightCurveDataset
-from model import masking_autoencoder
+from src.data.data import normalize, resample_to_grid, LightCurveDataset
+from src.models.model import masking_autoencoder
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model = masking_autoencoder()

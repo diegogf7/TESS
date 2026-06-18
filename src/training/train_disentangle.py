@@ -5,9 +5,9 @@ from sklearn.metrics import balanced_accuracy_score
 import numpy as np
 
 
-from data import LightCurveDataset, ClassificationDataset, DisentanglementDataset
-from s4d import S4Model
-from disentangle import DisentanglementModel, flow_matching_loss, info_nce, contrastive_flow_matching_loss
+from src.data.data import LightCurveDataset, ClassificationDataset, DisentanglementDataset
+from src.models.s4d import S4Model
+from src.models.disentangle import DisentanglementModel, flow_matching_loss, info_nce, contrastive_flow_matching_loss
 
 def random_mask(flux, mask, mask_ratio = 0.3, random_ratio = 0.1, true_ratio = 0.1):
 
@@ -138,6 +138,4 @@ for epoch in range(EPOCHS):
     print(f"Epoch {epoch+1} / {EPOCHS}, average loss: {average_loss_val:.6f}")
 
 
-
     torch.save(model.state_dict(), '/orcd/scratch/orcd/006/diegogon/checkpoints/disentangle.pth')
-

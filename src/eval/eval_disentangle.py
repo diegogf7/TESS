@@ -2,11 +2,11 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-from data import normalize, resample_to_grid, LightCurveDataset
-from model import masking_autoencoder
-from data import DisentanglementDataset, ClassificationDataset
+from src.data.data import normalize, resample_to_grid, LightCurveDataset
+from src.models.model import masking_autoencoder
+from src.data.data import DisentanglementDataset, ClassificationDataset
 from torch.utils.data import DataLoader
-from disentangle import DisentanglementModel, flow_matching_loss
+from src.models.disentangle import DisentanglementModel, flow_matching_loss
 from sklearn.metrics import balanced_accuracy_score
 
 from sklearn.linear_model import LogisticRegression
