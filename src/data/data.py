@@ -97,10 +97,10 @@ class ClassificationDataset(Dataset):
 
     
 class DisentanglementDataset(Dataset):
-    def __init__(self, parquet, grid_length = 1024):
+    def __init__(self, parquet, grid_length = 1024,multi_sector_only = False):
         self.df = pd.read_parquet(parquet)
         self.grid_length = grid_length
-
+        
 
         #I don't know how to do this properly
         self.tic_to_indices = {tic: list(indices) for tic, indices in self.df.groupby('TIC').groups.items()}
@@ -109,9 +109,16 @@ class DisentanglementDataset(Dataset):
 
         self.tics = self.df['TIC'].to_numpy()
         self.sectors = self.df['sector'].to_numpy()
+        
+
+        if multi_sector_only:
+            self.anchor_indices = [i for i in range(len(self.df))
+                if len({self.sectors[j] for j in self.tic_to_indices[self.tics[i]]}) >= 2]
+        else:
+            self.anchor_indices = list(range(len(self.df)))
 
     def __len__(self):
-        return len(self.df)
+        return len(self.anchor_indices)
     
     def load_curve(self, idx):
 
@@ -123,6 +130,7 @@ class DisentanglementDataset(Dataset):
         return flux_tensor, mask_tensor
     
     def __getitem__(self, idx):
+        idx = self.anchor_indices[idx]
         anchor_row = self.df.iloc[idx]
         anchor_tic = anchor_row['TIC']
         anchor_sector = anchor_row['sector']
