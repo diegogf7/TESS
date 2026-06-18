@@ -47,6 +47,27 @@ class JEPA_1(nn.Module):
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
+    def forward(self, context, context_mask, target, target_mask): #context for online and the target for EMA
+
+        z_context = self.online_encoder(context, context_mask)
+        prediction = self.predictor(z_context)
+
+        #target curve does not have a gradient going on
+
+        with torch.no_grad():
+            z_target = self.target_encoder(target, target_mask)
+        
+        return prediction, z_target
+    
+    @torch.no_grad()
+    def update_target(self):
+        m = self.momentum
+        for online_p, target_p in zip(self.online_encoder.parameters(), self.target_encoder.parameters()):
+            
+            target_p.data = m * target_p.data + (1.0 - m) * online_p.data
+
+
+
     
 
         
