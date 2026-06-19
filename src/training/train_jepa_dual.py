@@ -13,10 +13,10 @@ DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classifi
 VAL_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val.parquet"
 
 
-dataset = DisentanglementDataset(DATA_PATH, grid_length =1024)
+dataset = DisentanglementDataset(DATA_PATH, grid_length =1024, multi_sector_only = True)
 dataloader = DataLoader(dataset, batch_size = BATCH_SIZE, shuffle = True, num_workers = 4)
 
-val_dataset = DisentanglementDataset(VAL_PATH, grid_length = 1024)
+val_dataset = DisentanglementDataset(VAL_PATH, grid_length = 1024, multi_sector_only = True)
 val_dataloader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True, num_workers = 4)
 
 
