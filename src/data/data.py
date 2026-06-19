@@ -34,17 +34,13 @@ def normalize(flux, clip_sigma = 6.0):
     median = np.median(flux)
     if median == 0:
         median = 1.0
-    flux = flux / median
+    flux = flux / (median - 1.0)
 
-    mean_absolute_deviation = np.median(np.abs(flux - median))
-    scale_to_use = mean_absolute_deviation * 1.4826
-    if scale_to_use > 0:
-        flux = np.clip(flux, 1.0 - clip_sigma * scale_to_use, 1.0 + clip_sigma * scale_to_use) #doesn't this go above 1 and is not between 0 and 1?
-
-    flux_min = flux.min()
-    flux_max = flux.max()
-    if flux_max > flux_min:
-        flux = (flux - flux_min) / (flux_max - flux_min)
+    mean_absolute_deviation = np.median(np.abs(flux))
+    scale = mean_absolute_deviation * 1.4826
+    if scale > 0:
+        flux = np.clip(flux, -clip_sigma * scale, clip_sigma * scale)
+    
     return flux
 
 
