@@ -57,7 +57,7 @@ class JEPA_2(nn.Module):
         with torch.no_grad():
             z_target = self.target_encoder(target, target_mask)
         
-        return prediction, z_target
+        return prediction, z_target, z_context
     
     @torch.no_grad()
     def update_target(self):
@@ -73,3 +73,8 @@ def jepa_loss(prediction, z_target):
     z_target = nn.functional.normalize(z_target, dim = -1)
 
     return nn.functional.mse_loss(prediction, z_target)
+
+def variance_loss(z, gamma = 1.0, eps = 0.0001):
+    z = z.reshape(z.shape[0], -1)
+    std = torch.sqrt(z.var(dim = 0) + eps)
+    return torch.mean(torch.relu(gamma - std))
