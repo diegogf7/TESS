@@ -188,7 +188,27 @@ class SectorDataset(Dataset):
         
         return grid_flux, observed, sector 
         
+class DualEvalDataset(Dataset):
+    def __init__(self, parquet, grid_length = 1024):
+        self.df = pd.read_parquet(parquet)
+        self.grid_length = grid_length
 
+
+    def __len__(self):
+        return len(self.df)
+    
+    def __getitem__(self, idx):
+
+        row = self.df.iloc[idx]
+        flux = normalize(np.array(row["flux"]))
+        grid_flux, observed = resample_to_grid(np.array(row["time"]), flux, self.grid_length)
+        grid_flux = torch.tensor(grid_flux, dtype = torch.float32)
+        observed = torch.tensor(observed, dtype = torch.float32)
+        sector = torch.tensor(int(row["sector"]))
+
+        label = torch.tensor(CLASS_TO_IDX[row["label"]])
+        return grid_flux, observed, sector, label
+    
 
 
 
