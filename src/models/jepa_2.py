@@ -74,7 +74,7 @@ def jepa_loss(prediction, z_target):
 
     return nn.functional.mse_loss(prediction, z_target)
 
-def variance_loss(z, gamma = 1.0, eps = 0.0001):
+"""def variance_loss(z, gamma = 1.0, eps = 0.0001):
     z = z.reshape(z.shape[0], -1)
     std = torch.sqrt(z.var(dim = 0) + eps)
-    return torch.mean(torch.relu(gamma - std))
+    return torch.mean(torch.relu(gamma - std))"""
