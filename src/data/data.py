@@ -100,7 +100,7 @@ class ClassificationDataset(Dataset):
 
     
 class DisentanglementDataset(Dataset):
-    def __init__(self, parquet, grid_length = 1024,multi_sector_only = False):
+    def __init__(self, parquet, grid_length = 1024,multi_sector_only = False, descriptor_path = None, k_sec = 5):
         self.df = pd.read_parquet(parquet)
         self.grid_length = grid_length
         
@@ -119,6 +119,19 @@ class DisentanglementDataset(Dataset):
                 if len({self.sectors[j] for j in self.tic_to_indices[self.tics[i]]}) >= 2]
         else:
             self.anchor_indices = list(range(len(self.df)))
+
+        self.sector_neighbors = None
+        if descriptor_path is not None:
+            D = np.load(descriptor_path)
+            Dz = (D - D.mean(0)) / (D.std(0) + 1e-9)
+            uniq = np.unique(self.sectors)
+            sector_mean = np.array([Dz[self.sectors == s].mean(0) for s in uniq])
+            diff = sector_mean[:, None, :] - sector_mean[None, :, :]
+            dist = np.sqrt((diff ** 2).sum(-1))
+            order = np.argsort(dist, axis=1)                       # col 0 is the sector itself
+            self.sector_neighbors = {int(uniq[i]): [int(uniq[j]) for j in order[i, 1:k_sec + 1]]
+                                     for i in range(len(uniq))}
+
 
     def __len__(self):
         return len(self.anchor_indices)
@@ -151,13 +164,14 @@ class DisentanglementDataset(Dataset):
             new_sector = random.choice(potential_sectors)
 
 
-        sector = self.sector_to_indices[anchor_sector]
-        potential_TICs = [i for i in sector if self.tics[i] != anchor_tic]
-
-        if len(potential_TICs) == 0:
-            new_TIC = idx
+        if self.sector_neighbors is not None:
+            chosen_sector = random.choice(self.sector_neighbors[anchor_sector])
+            new_TIC = random.choice(self.sector_to_indices[chosen_sector])
         else:
-            new_TIC = random.choice(potential_TICs)
+            sector = self.sector_to_indices[anchor_sector]
+            potential_TICs = [i for i in sector if self.tics[i] != anchor_tic]
+
+            new_TIC = random.choice(potential_TICs) if potential_TICs else idx
 
         anchor_flux, anchor_mask = self.load_curve(idx)
         second_flux, second_mask = self.load_curve(new_sector)
