@@ -23,9 +23,16 @@ def resample_to_grid(time, flux, grid_length = 1024): #
     interpolar = interp1d(time, flux)
     grid_flux = interpolar(time_grid)
 
-    #need a way to create a list that shows that we have gaps in data
-    observed = np.isfinite(grid_flux).astype(np.float32)
-    grid_flux = np.nan_to_num(grid_flux, nan=0.0)
+    cadence = np.median(np.diff(time))
+    idx = np.searchsorted(time, time_grid)
+    idx = np.clip(idx, 1, len(time) -1)
+    left = time[idx -1]
+    right = time[idx]
+    distance = np.minimum(time_grid - left, right - time_grid)
+
+    observed = (distance <= 3 * cadence).astype(np.float32)
+
+    grid_flux = np.where(observed > 0, grid_flux, 0.0)
 
     return grid_flux, observed
 
@@ -34,7 +41,7 @@ def normalize(flux, clip_sigma = 6.0):
     median = np.median(flux)
     if median == 0:
         median = 1.0
-    flux = flux / (median - 1.0)
+    flux = (flux / median) - 1.0
 
     mean_absolute_deviation = np.median(np.abs(flux))
     scale = mean_absolute_deviation * 1.4826
