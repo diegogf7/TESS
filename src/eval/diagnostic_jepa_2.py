@@ -16,7 +16,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 
 from src.data.data import DualEvalDataset
-from src.models.jepa_2 import JEPA_2
+from src.models.physics_jepa import PhysicsJEPA
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
@@ -25,7 +25,7 @@ from sklearn.metrics import balanced_accuracy_score
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 DATA_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train.parquet"
-CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/training_jepa2.pth"
+CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/training_physics_jepa.pth"
 BATCH_SIZE = 256
 
 
@@ -50,7 +50,7 @@ def run_probe(X, y, name):
     print(f"{name}: balanced accuracy = {acc:.4f}   (chance = {chance:.4f})")
 
 
-model = JEPA_2(256, 4, 0.2, 0.996).to(DEVICE)
+model = PhysicsJEPA(256, 4, 0.2, 0.996).to(DEVICE)
 model.load_state_dict(torch.load(CHECKPOINT, map_location=DEVICE))
 model.eval()
 
@@ -74,5 +74,6 @@ all_sectors = np.concatenate(all_sectors)
 all_labels  = np.concatenate(all_labels)
 
 print(f"STANDALONE physics latent std: {physics_latent.std(0).mean():.4f}")
-run_probe(physics_latent, all_labels,  "STANDALONE physics -> CLASS  (want HIGH)")
+keep = all_labels != 5
+run_probe(physics_latent[keep], all_labels[keep],  "STANDALONE physics -> CLASS  (want HIGH)")
 run_probe(physics_latent, all_sectors, "STANDALONE physics -> SECTOR (want ~chance)")
