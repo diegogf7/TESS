@@ -5,7 +5,7 @@ from sklearn.metrics import balanced_accuracy_score
 import numpy as np
 
 from src.data.data import LightCurveDataset, ClassificationDataset
-from src.models.s4d import S4Model
+from src.models.s4d import S4Model, S4Classifier
 
 BATCH_SIZE = 256
 EPOCHS = 100
@@ -22,7 +22,7 @@ dataloader = DataLoader(dataset, batch_size = BATCH_SIZE, shuffle = True, num_wo
 
 val_dataloader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True, num_workers=4)
 
-model = S4Model(d_input = 1, d_output = 8, d_model = 256, n_layers = 4, dropout = 0.2).to(DEVICE)
+model = S4Classifier(d_input = 1, n_classes = 8, d_model = 256, n_layers = 4, dropout = 0.2).to(DEVICE)
 
 optimizer = torch.optim.AdamW(model.parameters(), lr = 0.001)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = EPOCHS)
