@@ -81,16 +81,15 @@ class PhysicsJEPA(nn.Module):
     
     def forward(self, flux, mask):
 
-        online_flux, online_mask = self.mask_input(flux, mask)
+        online_flux, online_mask = self.augment(flux, mask)
+        target_flux, target_mask = self.augment(flux, mask)
+
         z_online = self.online_encoder(online_flux.unsqueeze(-1), online_mask)
         prediction = self.predictor(z_online)
 
-
-
         with torch.no_grad():
-            z_target = self.target_encoder(flux.unsqueeze(-1), mask)
+            z_target = self.target_encoder(target_flux.unsqueeze(-1), target_mask)
 
-        
         return prediction, z_target
     
     @torch.no_grad()
