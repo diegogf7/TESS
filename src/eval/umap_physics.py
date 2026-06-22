@@ -2,6 +2,7 @@ import torch
 
 import numpy as np
 import matplotlib
+import pandas as pd
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
@@ -55,7 +56,7 @@ embedding = umap.UMAP(n_neighbors = 15, min_dist = 0.1, random_state = 0).fit_tr
 plt.figure(figsize = (9, 7))
 for c in np.unique(labels):
     m = labels == c #what is this doing
-    plt.scatter(embedding[m, 0], embedding[m, 1], s=4, alpha = 0.5, label = CLASSES[c])
+    plt.scatter(embedding[m, 0], embedding[m, 1], s=4, alpha = 0.2, label = CLASSES[c])
 
 plt.legend(markerscale =3, fontsize = 8)
 plt.title("Latent UMAP (Colored by our Classes)")
@@ -64,11 +65,22 @@ plt.close()
 
 #now I need it by sector
 plt.figure(figsize = (9,7))
-sc = plt.scatter(embedding[:, 0], embedding[:, 1], c = sectors, s=4, alpha = 0.5, cmap = "viridis")
+sc = plt.scatter(embedding[:, 0], embedding[:, 1], c = sectors, s=4, alpha = 0.2, cmap = "viridis")
 plt.colorbar(sc, label = "sector")
 
 plt.title("Latent UMAP (Colored by our Sectors)")
 plt.savefig(f"{OUT_DIR}/umap_by_sector.png", dpi=150, bbox_inches="tight")
 plt.close()
 
-print(f"saved umap_by_class.png and umap_by_sector.png to {OUT_DIR}")
+df = pd.read_parquet(DATA_PATH)
+lengths = df["flux"].apply(len).to_numpy()
+
+plt.figure(figsize = (9, 7))
+sc = plt.scatter(embedding[:,0], embedding[:, 1], c = lengths, s=3, alpha = 0.2, cmap = "viridis")
+plt.colorbar(sc, label = "light curve length")
+plt.title("Latent UMAP (Colored by light curve length)")
+plt.savefig(f"{OUT_DIR}/umap_by_length.png", dpi=150, bbox_inches="tight")
+plt.close()
+
+
+print(f"saved umap_by_class.png, umap_by_sector.png, umap_by_length.png to {OUT_DIR}")
