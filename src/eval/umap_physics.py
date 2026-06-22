@@ -67,7 +67,7 @@ plt.figure(figsize = (9,7))
 sc = plt.scatter(embedding[:, 0], embedding[:, 1], c = sectors, s=4, alpha = 0.5, cmap = "viridis")
 plt.colorbar(sc, label = "sector")
 
-plt.title("Physics latent UMAP — colored by SECTOR (want a smear, not clusters)")
+plt.title("Latent UMAP (Colored by our Sectors)")
 plt.savefig(f"{OUT_DIR}/umap_by_sector.png", dpi=150, bbox_inches="tight")
 plt.close()
 
