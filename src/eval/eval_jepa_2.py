@@ -12,7 +12,7 @@ from sklearn.model_selection import train_test_split
 
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
-from src.models.jepa_2 import JEPA_2
+from src.models.physics_jepa import PhysicsJEPA
 
 
 
@@ -21,7 +21,7 @@ DATA_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classif
 CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/training_jepa2.pth"
 BATCH_SIZE = 256
 
-model = JEPA_2(256, 4, 0.2, 0.996).to(DEVICE)
+model = PhysicsJEPA(256, 4, 0.2, 0.996).to(DEVICE)
 
 model.load_state_dict(torch.load(CHECKPOINT, map_location = DEVICE))
 model.eval()

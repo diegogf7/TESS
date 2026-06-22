@@ -30,13 +30,18 @@ class Predictor(nn.Module):
     
 class PhysicsJEPA(nn.Module):
 
-    def __init__(self, d_model = 256, n_layers = 4, dropout = 0.2, momentum = 0.996, patch = 16, mask_ratio = 0.5):
+    def __init__(self, d_model = 256, n_layers = 4, dropout = 0.2, momentum = 0.996, patch = 16, mask_ratio = 0.5, amplitude_min = 0.5, amplitude_max = 2.0, noise_min = 0.1, noise_max = 0.6):
         super().__init__()
 
         self.momentum = momentum
         self.patch = patch
 
         self.mask_ratio = mask_ratio
+
+        self.amplitude_min = amplitude_min
+        self.amplitude_max = amplitude_max
+        self.noise_min = noise_min
+        self.noise_max = noise_max
 
         self.online_encoder = PhysicsEncoder(d_model = d_model, n_layers = n_layers, dropout = dropout)
         self.predictor = Predictor(16, 4, 256)
@@ -59,6 +64,20 @@ class PhysicsJEPA(nn.Module):
         view_flux = flux * keep
         view_mask = mask * keep
         return view_flux, view_mask
+    
+    def augment(self, flux, mask):
+
+        B, L = flux.shape
+
+        scale = torch.empty(B, 1, device = flux.device).uniform_(self.amplitude_min, self.amplitude_max)
+        flux = flux * scale
+
+        #need to add random noise to our curve
+        curve_scale = (flux * mask).std(dim = 1, keepdim = True) + 1e-6
+        noise_level = torch.empty(B, 1, device = flux.device).uniform_(self.noise_min, self.noise_max)
+        flux = flux + torch.randn_like(flux) * noise_level * curve_scale * mask
+
+        return self.mask_input(flux, mask)
     
     def forward(self, flux, mask):
 
