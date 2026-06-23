@@ -19,7 +19,7 @@ val_dataset = LightCurveDataset(VAL_PATH, grid_length=1024)
 val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 
 
-model = PhysicsJEPA(d_model = 256, n_layers = 4, dropout = 0.2, momentum = 0.996).to(DEVICE)
+model = PhysicsJEPA(d_model = 256, n_layers = 4, dropout = 0.2, momentum = 0.996, use_adversary = False).to(DEVICE)
 
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr = 0.001)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = EPOCHS)
@@ -35,7 +35,7 @@ for epoch in range(EPOCHS):
 
         optimizer.zero_grad()
 
-        prediction, z_target = model(flux, mask)
+        prediction, z_target, _ = model(flux, mask)
         loss = jepa_loss(prediction, z_target)
 
         loss.backward()
@@ -61,7 +61,7 @@ for epoch in range(EPOCHS):
             flux = flux.to(DEVICE)
             mask = mask.to(DEVICE)
 
-            prediction, z_target = model(flux, mask)
+            prediction, z_target, _ = model(flux, mask)
 
             loss = jepa_loss(prediction, z_target)
 

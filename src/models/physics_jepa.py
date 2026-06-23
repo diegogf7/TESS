@@ -60,7 +60,7 @@ class Predictor(nn.Module):
     
 class PhysicsJEPA(nn.Module):
 
-    def __init__(self, d_model = 256, n_layers = 4, dropout = 0.2, momentum = 0.996, patch = 16, mask_ratio = 0.5, amplitude_min = 0.5, amplitude_max = 2.0, noise_min = 0.1, noise_max = 0.6, n_sectors = 35, lambd = 1.0):
+    def __init__(self, d_model = 256, n_layers = 4, dropout = 0.2, momentum = 0.996, patch = 16, mask_ratio = 0.5, amplitude_min = 0.5, amplitude_max = 2.0, noise_min = 0.1, noise_max = 0.6, n_sectors = 35, lambd = 1.0, use_adversary = True):
         super().__init__()
 
         self.momentum = momentum
@@ -77,7 +77,9 @@ class PhysicsJEPA(nn.Module):
         self.predictor = Predictor(16, 4, 256)
 
         self.lambd = lambd
-        self.sector_classifier = SectorClassifier(in_dim = 16 * 4, n_sectors = n_sectors)
+        self.use_adversary = use_adversary
+        if use_adversary:
+            self.sector_classifier = SectorClassifier(in_dim = 16 * 4, n_sectors = n_sectors)
 
         self.target_encoder = PhysicsEncoder(d_model = d_model, n_layers = n_layers, dropout = dropout)
         self.target_encoder.load_state_dict(self.online_encoder.state_dict())
@@ -120,7 +122,9 @@ class PhysicsJEPA(nn.Module):
         z_online = self.online_encoder(online_flux.unsqueeze(-1), online_mask)
         prediction = self.predictor(z_online)
 
-        sector_logits = self.sector_classifier(grad_reverse(z_online, self.lambd))
+        sector_logits = None
+        if self.use_adversary:
+            sector_logits = self.sector_classifier(grad_reverse(z_online, self.lambd))
 
         with torch.no_grad():
             z_target = self.target_encoder(target_flux.unsqueeze(-1), target_mask)
