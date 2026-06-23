@@ -9,6 +9,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import balanced_accuracy_score
+from sklearn.neighbors import KNeighborsClassifier
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
@@ -28,7 +29,7 @@ def run_probe(X, y, name):
     x_train = scaler.fit_transform(x_train)
     x_test = scaler.transform(x_test)
 
-    probe = LogisticRegression(max_iter=5000)
+    probe = KNeighborsClassifier(n_neighbors = 20)
     probe.fit(x_train, y_train)
     predictions = probe.predict(x_test)
 
