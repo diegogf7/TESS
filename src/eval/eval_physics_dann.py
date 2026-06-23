@@ -11,8 +11,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import balanced_accuracy_score
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-DATA_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train.parquet"
-CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/training_physics_dann.pth"
+DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
+CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/training_physics_jepa.pth"
 BATCH_SIZE = 256
 
 
@@ -47,7 +47,7 @@ print(f"{len(dataset)} samples, {len(loader)} batches")
 n_sectors = dataset.df["sector"].nunique()
 print(f"{n_sectors} sectors")
 
-model = PhysicsJEPA(d_model=256, n_layers=4, dropout=0.2, momentum=0.996, n_sectors=n_sectors, lambd=1.0).to(DEVICE)
+model = PhysicsJEPA(d_model=256, n_layers=4, dropout=0.2, momentum=0.996, n_sectors=n_sectors, lambd=1.0, use_adversary=False).to(DEVICE)
 model.load_state_dict(torch.load(CHECKPOINT, map_location=DEVICE))
 model.eval()
 

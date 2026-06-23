@@ -15,12 +15,12 @@ from src.data.data import DualEvalDataset, CLASSES
 from src.models.physics_jepa import PhysicsJEPA
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-DATA_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train.parquet"
+DATA_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
 CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/training_physics_jepa.pth"
 OUT_DIR    = "/orcd/scratch/orcd/006/diegogon/checkpoints"
 BATCH_SIZE = 256
 
-model = PhysicsJEPA(256, 4, 0.2, 0.996).to(DEVICE)
+model = PhysicsJEPA(256, 4, 0.2, 0.996, use_adversary = False).to(DEVICE)
 model.load_state_dict(torch.load(CHECKPOINT, map_location = DEVICE))
 
 model.eval()
