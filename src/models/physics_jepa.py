@@ -77,8 +77,8 @@ class PhysicsJEPA(nn.Module):
         self.predictor = Predictor(16, 4, 256)
 
         self.lambd = lambd
-        self.sector_classifier = SectorClassifier(in_dim = 16 * 3, n_sectors = n_sectors)
-        
+        self.sector_classifier = SectorClassifier(in_dim = 16 * 4, n_sectors = n_sectors)
+
         self.target_encoder = PhysicsEncoder(d_model = d_model, n_layers = n_layers, dropout = dropout)
         self.target_encoder.load_state_dict(self.online_encoder.state_dict())
 
@@ -120,10 +120,12 @@ class PhysicsJEPA(nn.Module):
         z_online = self.online_encoder(online_flux.unsqueeze(-1), online_mask)
         prediction = self.predictor(z_online)
 
+        sector_logits = self.sector_classifier(grad_reverse(z_online, self.lambd))
+
         with torch.no_grad():
             z_target = self.target_encoder(target_flux.unsqueeze(-1), target_mask)
 
-        return prediction, z_target
+        return prediction, z_target, sector_logits
     
     @torch.no_grad()
     def update_target(self):
