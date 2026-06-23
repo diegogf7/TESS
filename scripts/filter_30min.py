@@ -10,7 +10,7 @@ def filter_30min(in_path, out_path, low = 26.0, high = 34.0):
     df = pd.read_parquet(in_path)
 
     df["cadence_min"] = df["time"].apply(cadence_minutes)
-    keep = df["cadence_min"].between(low, high)
+    keep = df["cadence_min"].between(low, high) & (df["label"] != "INSTRUMENT/JUNK")
 
     print(f"{in_path}: keeping {keep.sum()}/{len(df)} "f"({100*keep.mean():.1f}%)")
     print(df["cadence_min"].round(1).value_counts().head()) #just a smoke test I'm putting in
