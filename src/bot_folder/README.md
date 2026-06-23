@@ -70,6 +70,22 @@ gap shows the *pretraining* creates the structure, not the architecture alone.
 This is evidence for the *method*; the cluster run confirms the numbers on real
 TESS data.
 
+## 3b. Real-data result (cluster, job 16406515)
+
+Trained 100 epochs on the real 30-min TESS curves, then probed the frozen latent:
+
+| metric | value | chance |
+|---|---|---|
+| latent collapse check (mean std) | 0.152 | (want ≫ 0) ✅ |
+| **SECTOR balanced accuracy (target)** | **0.601** | 0.056 (18 sectors) |
+| CLASS balanced accuracy | 0.473 | 0.143 (7 classes) |
+
+Sector is recovered at ~11× chance from a frozen, label-free latent — the
+instrument signature is clearly captured. No collapse (the old physics_jepa's
+failure mode). Class ≈ 2× the old JEPA's ~0.24, though below the ~0.88
+supervised ceiling as expected for an SSL probe. Make the figures with
+`umap_masked.py` (see below).
+
 ## 4. Run order on the cluster
 
 ```bash
