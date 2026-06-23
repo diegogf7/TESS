@@ -37,8 +37,11 @@ def run_probe(X, y, name):
     print(f"{name}: balanced accuracy = {accuracy:.6f} (chance = {chance:.4f})")
 
 
+print(f"device: {DEVICE}")
+
 dataset = DualEvalDataset(DATA_PATH, 1024)
 loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, num_workers=4)
+print(f"{len(dataset)} samples, {len(loader)} batches")
 
 # n_sectors must match what training used so the checkpoint loads cleanly
 n_sectors = dataset.df["sector"].nunique()
@@ -53,7 +56,7 @@ all_sectors = []
 all_labels = []
 
 with torch.no_grad():
-    for flux, mask, sector, label in loader:
+    for i, (flux, mask, sector, label) in enumerate(loader):
         flux = flux.to(DEVICE).unsqueeze(-1)
         mask = mask.to(DEVICE)
 
@@ -62,6 +65,9 @@ with torch.no_grad():
 
         all_sectors.append(sector.numpy())
         all_labels.append(label.numpy())
+
+        if i % 10 == 0:
+            print(f"  extracting batch {i}/{len(loader)}")
 
 physics_latent = np.concatenate(physics_latent)
 all_sectors = np.concatenate(all_sectors)
