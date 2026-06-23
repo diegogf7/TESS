@@ -3,6 +3,36 @@ import torch.nn as nn
 
 from src.models.disentangle import PhysicsEncoder
 
+
+class GradientReversal(torch.autograd.Function):
+
+    @staticmethod
+
+    def forward(ctx, x, lambd):
+
+        ctx.lambd = lambd
+        return x.view_as(x)
+    
+    @staticmethod
+    def backward(ctx, grad_output):
+        return -ctx.lambd * grad_output, None
+    
+def grad_reverse(x, lambd = 1.0):
+    return GradientReversal.apply(x, lambd)
+
+class SectorClassifier(nn.Module):
+    def __init__(self, in_dim = 64, hidden = 128, n_sectors = 35):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(in_dim, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, n_sectors),
+
+        )  
+    def forward(self, z):
+        return self.net(z.flatten(1))
+
 class Predictor(nn.Module):
 
     def __init__(self, n_tokens = 16, token_dimension = 4, hidden = 256):
@@ -30,7 +60,7 @@ class Predictor(nn.Module):
     
 class PhysicsJEPA(nn.Module):
 
-    def __init__(self, d_model = 256, n_layers = 4, dropout = 0.2, momentum = 0.996, patch = 16, mask_ratio = 0.5, amplitude_min = 0.5, amplitude_max = 2.0, noise_min = 0.1, noise_max = 0.6):
+    def __init__(self, d_model = 256, n_layers = 4, dropout = 0.2, momentum = 0.996, patch = 16, mask_ratio = 0.5, amplitude_min = 0.5, amplitude_max = 2.0, noise_min = 0.1, noise_max = 0.6, n_sectors = 35, lambd = 1.0):
         super().__init__()
 
         self.momentum = momentum
@@ -46,6 +76,9 @@ class PhysicsJEPA(nn.Module):
         self.online_encoder = PhysicsEncoder(d_model = d_model, n_layers = n_layers, dropout = dropout)
         self.predictor = Predictor(16, 4, 256)
 
+        self.lambd = lambd
+        self.sector_classifier = SectorClassifier(in_dim = 16 * 3, n_sectors = n_sectors)
+        
         self.target_encoder = PhysicsEncoder(d_model = d_model, n_layers = n_layers, dropout = dropout)
         self.target_encoder.load_state_dict(self.online_encoder.state_dict())
 
