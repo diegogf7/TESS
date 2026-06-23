@@ -86,6 +86,29 @@ failure mode). Class ≈ 2× the old JEPA's ~0.24, though below the ~0.88
 supervised ceiling as expected for an SSL probe. Make the figures with
 `umap_masked.py` (see below).
 
+## 3c. LatentJEPA — predicting in REPRESENTATION space (not data space)
+
+`latent_jepa.py` is the "work with JEPA in latent space" model. The predictor's
+output is a **latent** and the loss is in latent space — the defining property of
+JEPA. It is the fixed version of the old collapsing `physics_jepa`, via: real
+masked-target prediction (predict each hidden segment's target latent at its
+position), target LayerNorm (not the old 4-D L2), wider latent (token_dim 16),
+and an optional variance safety net.
+
+Validated locally (`validate_jepa_synthetic.py`): it trains (loss 0.29 → 0.03)
+and — the key worry — **does NOT collapse** (latent std 0.10 → 0.17). Honest
+caveat: on synthetic, its frozen probe ≈ a random encoder, because predicting
+the encoder's *own* latent is self-referential and gives weaker probes than
+reconstructing the real data (a known SSL property; matches the old JEPA_2 ~38%
+stall). On real TESS (where random-init is weaker) it has a real shot at beating
+random — that's what the cluster run tests.
+
+Cluster run (separate checkpoint `latent_jepa.pth`, does NOT touch
+`masked_s4d.pth`):
+```bash
+sbatch src/bot_folder/run_jepa.sh        # train_jepa -> eval_jepa, log latent_jepa_%j.out
+```
+
 ## 4. Run order on the cluster
 
 ```bash
