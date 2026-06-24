@@ -109,6 +109,19 @@ Cluster run (separate checkpoint `latent_jepa.pth`, does NOT touch
 sbatch src/bot_folder/run_jepa.sh        # train_jepa -> eval_jepa, log latent_jepa_%j.out
 ```
 
+**Real-data result (cluster job 16413201) — beat the masked model on the target:**
+
+| metric | masked AE (data-space) | LatentJEPA (rep-space) | chance |
+|---|---|---|---|
+| **SECTOR (target)** | 0.601 | **0.657** | 0.056 |
+| CLASS | 0.473 | 0.425 | 0.143 |
+| latent std (collapse) | 0.152 | **0.328** | want ≫ 0 |
+
+The pure representation-space JEPA recovers sector at ~12× chance — the best
+sector result, and the least-collapsed latent. (Synthetic under-sold it because
+random-init S4D is unusually strong on the clean synthetic signal; on real TESS
+random-init is weak, so the JEPA's learning shows.) Figures: `umap_jepa.py`.
+
 ## 4. Run order on the cluster
 
 ```bash
