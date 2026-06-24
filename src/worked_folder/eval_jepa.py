@@ -21,7 +21,9 @@ from sklearn.neighbors import KNeighborsClassifier
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
-CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa_transformer.pth"
+# MLP-predictor (pre-transformer) runs: latent_jepa.pth (~0.649) / latent_jepa_run1.pth (0.657)
+# transformer-predictor run:            latent_jepa_transformer.pth
+CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa.pth"
 BATCH_SIZE = 256
 
 
@@ -49,7 +51,12 @@ loader = DataLoader(dataset, BATCH_SIZE, shuffle=False, num_workers=2)
 print(f"{len(dataset)} samples, {len(loader)} batches")
 
 model = build_latent_jepa().to(DEVICE)
-model.load_state_dict(torch.load(CHECKPOINT, map_location=DEVICE))
+# strict=False: eval only uses target_encoder (via model.encode), so a predictor
+# mismatch (MLP checkpoint vs current transformer build) is fine. The only
+# missing/unexpected keys should be predictor.* — print them to confirm.
+missing, unexpected = model.load_state_dict(torch.load(CHECKPOINT, map_location=DEVICE), strict=False)
+print(f"missing keys (in model, not ckpt):  {missing}")
+print(f"unexpected keys (in ckpt, not model): {unexpected}")
 model.eval()
 
 latents, all_sectors, all_labels = [], [], []
