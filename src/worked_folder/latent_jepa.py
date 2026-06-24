@@ -24,6 +24,8 @@ Flow:  context curve (hidden segments zeroed) -> context encoder -> predictor
        loss = smooth-L1(predicted, target) on hidden segments only.
 """
 
+import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -75,6 +77,7 @@ class LatentJEPA(nn.Module):
         dropout=0.2,
         mask_ratio=0.5,
         momentum=0.996,
+        readout="mean",
     ):
         super().__init__()
         self.n_tokens = n_tokens
@@ -84,11 +87,11 @@ class LatentJEPA(nn.Module):
 
         self.context_encoder = S4Model(
             d_input=1, d_model=d_model, n_layers=n_layers, dropout=dropout,
-            n_tokens=n_tokens, token_dim=token_dim,
+            n_tokens=n_tokens, token_dim=token_dim, readout=readout,
         )
         self.target_encoder = S4Model(
             d_input=1, d_model=d_model, n_layers=n_layers, dropout=dropout,
-            n_tokens=n_tokens, token_dim=token_dim,
+            n_tokens=n_tokens, token_dim=token_dim, readout=readout,
         )
         self.target_encoder.load_state_dict(self.context_encoder.state_dict())
         for p in self.target_encoder.parameters():
@@ -149,8 +152,24 @@ def jepa_latent_loss(pred, tgt, seg_mask, var_weight=0.0):
 
 
 def build_latent_jepa():
-    """Shared architecture for train + eval so the checkpoint can't drift."""
+    """Shared architecture for train + eval so the checkpoint can't drift.
+
+    Config is read from env vars so the cluster runner can sweep configs without
+    editing source (and train/eval always agree). Defaults reproduce the original
+    MLP/transformer model exactly:
+        JEPA_NTOKENS    (default 16)   more tokens = smaller segments = resolves
+                                        faster oscillations (class signal)
+        JEPA_TOKENDIM   (default 16)
+        JEPA_READOUT    (default mean) "mean_std" keeps per-segment std so
+                                        sub-segment class amplitude survives pooling
+        JEPA_MASK_RATIO (default 0.5)
+    """
     return LatentJEPA(
-        grid_length=1024, n_tokens=16, token_dim=16,
-        d_model=256, n_layers=4, dropout=0.2, mask_ratio=0.5, momentum=0.996,
+        grid_length=1024,
+        n_tokens=int(os.environ.get("JEPA_NTOKENS", "16")),
+        token_dim=int(os.environ.get("JEPA_TOKENDIM", "16")),
+        d_model=256, n_layers=4, dropout=0.2,
+        mask_ratio=float(os.environ.get("JEPA_MASK_RATIO", "0.5")),
+        momentum=0.996,
+        readout=os.environ.get("JEPA_READOUT", "mean"),
     )

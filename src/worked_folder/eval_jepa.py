@@ -7,6 +7,8 @@ and SECTOR / CLASS balanced accuracies.
     python -m src.bot_folder.eval_jepa
 """
 
+import os
+
 import torch
 import numpy as np
 
@@ -21,9 +23,10 @@ from sklearn.neighbors import KNeighborsClassifier
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
-# MLP-predictor (pre-transformer) runs: latent_jepa.pth (~0.649) / latent_jepa_run1.pth (0.657)
-# transformer-predictor run:            latent_jepa_transformer.pth
-CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa.pth"
+# Set JEPA_CKPT (and matching JEPA_NTOKENS/JEPA_READOUT) to pick the run:
+#   MLP-predictor (pre-transformer): latent_jepa.pth (~0.649) / latent_jepa_run1.pth (0.657)
+#   transformer-predictor:           latent_jepa_transformer.pth
+CHECKPOINT = os.environ.get("JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa_transformer.pth")
 BATCH_SIZE = 256
 
 

@@ -141,12 +141,14 @@ class S4Model(nn.Module):
             dt_min = 0.001,
             dt_max = 0.1,
             n_tokens = 4,
-            token_dim = 16
+            token_dim = 16,
+            readout = "mean"
     ):
-        
+
         super().__init__()
 
         self.prenorm = prenorm
+        self.readout = readout
 
         self.encoder = nn.Linear(d_input, d_model)
 
@@ -165,7 +167,11 @@ class S4Model(nn.Module):
         
 
         self.n_tokens = n_tokens
-        self.decoder = nn.Linear(d_model, token_dim)
+        # "mean_std" concatenates per-segment mean AND std before the decoder, so
+        # sub-segment oscillation amplitude (high-freq class signal that the mean
+        # averages to ~0) survives the pooling. "mean" = original behaviour.
+        pool_dim = d_model * (2 if readout == "mean_std" else 1)
+        self.decoder = nn.Linear(pool_dim, token_dim)
 
     def forward(self, x, mask = None):
         #not sure how to implement this properly
@@ -196,13 +202,21 @@ class S4Model(nn.Module):
 
         if mask is not None:
             mask_f = mask.reshape(B, N, L // N, 1).to(x.dtype)
-
-            x = (x * mask_f).sum(dim = 2) / mask_f.sum(dim = 2).clamp(min = 1)
+            denom = mask_f.sum(dim = 2).clamp(min = 1)
+            mean = (x * mask_f).sum(dim = 2) / denom
+            if self.readout == "mean_std":
+                var = (((x - mean.unsqueeze(2)) ** 2) * mask_f).sum(dim = 2) / denom
+                pooled = torch.cat([mean, (var + 1e-6).sqrt()], dim = -1)
+            else:
+                pooled = mean
         else:
+            mean = x.mean(dim = 2)
+            if self.readout == "mean_std":
+                pooled = torch.cat([mean, x.std(dim = 2)], dim = -1)
+            else:
+                pooled = mean
 
-            x = x.mean(dim = 2)
-
-        tokens = self.decoder(x)
+        tokens = self.decoder(pooled)
         return tokens
 
         
