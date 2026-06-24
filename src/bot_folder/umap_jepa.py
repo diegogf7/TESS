@@ -23,6 +23,7 @@ DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classifi
 CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa.pth"
 OUT_DIR = "/orcd/scratch/orcd/006/diegogon/checkpoints"
 BATCH_SIZE = 256
+MARKERS = ["o", "s", "D", "^", "p", "H", "*", "+"]
 
 model = build_latent_jepa().to(DEVICE)
 model.load_state_dict(torch.load(CHECKPOINT, map_location=DEVICE))
@@ -50,7 +51,7 @@ embedding = umap.UMAP(n_neighbors=15, min_dist=0.1, random_state=0).fit_transfor
 
 # colored by SECTOR (the target structure)
 plt.figure(figsize=(9, 7))
-sc = plt.scatter(embedding[:, 0], embedding[:, 1], c=sectors, s=4, alpha=0.3, cmap="tab20")
+sc = plt.scatter(embedding[:, 0], embedding[:, 1], c=sectors, s=4, alpha=0.15, cmap="tab20")
 plt.colorbar(sc, label="sector")
 plt.title("LatentJEPA latent UMAP (colored by SECTOR)")
 plt.savefig(f"{OUT_DIR}/jepa_umap_by_sector.png", dpi=150, bbox_inches="tight")
@@ -60,7 +61,7 @@ plt.close()
 plt.figure(figsize=(9, 7))
 for c in np.unique(labels):
     m = labels == c
-    plt.scatter(embedding[m, 0], embedding[m, 1], s=4, alpha=0.3, label=CLASSES[c])
+    plt.scatter(embedding[m, 0], embedding[m, 1], s=4, alpha=0.15, marker = MARKERS[c], label=CLASSES[c])
 plt.legend(markerscale=3, fontsize=8)
 plt.title("LatentJEPA latent UMAP (colored by CLASS)")
 plt.savefig(f"{OUT_DIR}/jepa_umap_by_class.png", dpi=150, bbox_inches="tight")
