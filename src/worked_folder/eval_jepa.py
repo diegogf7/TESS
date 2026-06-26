@@ -17,9 +17,11 @@ from src.data.data import DualEvalDataset
 from src.worked_folder.latent_jepa import build_latent_jepa
 
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import balanced_accuracy_score
 from sklearn.neighbors import KNeighborsClassifier
+
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
+
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
@@ -30,13 +32,25 @@ CHECKPOINT = os.environ.get("JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkp
 BATCH_SIZE = 256
 
 
-def run_probe(X, y, name):
+def run_probe(X, y, name, groups=None):
     uni, counts = np.unique(y, return_counts=True)
     keep = uni[counts >= 2]
     m = np.isin(y, keep)
     X, y = X[m], y[m]
+    if groups is not None:
+        groups = groups[m]
 
-    x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=0)
+    if groups is not None:
+        # Group by star: every sector of a given TIC lands entirely in train OR
+        # test, so the KNN can't memorize the same star across the split.
+        splitter = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=0)
+        train_idx, test_idx = next(splitter.split(X, y, groups))
+        x_train, x_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+    else:
+        x_train, x_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, stratify=y, random_state=0)
+
     scaler = StandardScaler()
     x_train = scaler.fit_transform(x_train)
     x_test = scaler.transform(x_test)
@@ -77,8 +91,9 @@ with torch.no_grad():
 latents = np.concatenate(latents)
 all_sectors = np.concatenate(all_sectors)
 all_labels = np.concatenate(all_labels)
+all_tics = dataset.df["TIC"].to_numpy()
 
 print(f"Mean std of latent (collapse check, want >> 0): {latents.std(0).mean():.6f}")
 
 run_probe(latents, all_sectors, "latent --> SECTOR (target, want high)")
-run_probe(latents, all_labels,  "latent --> CLASS")
+run_probe(latents, all_labels,  "latent --> CLASS", groups = all_tics)
