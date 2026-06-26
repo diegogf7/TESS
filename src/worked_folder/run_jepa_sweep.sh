@@ -26,10 +26,14 @@ mkdir -p /orcd/scratch/orcd/006/diegogon/checkpoints
 CKPT_DIR=/orcd/scratch/orcd/006/diegogon/checkpoints
 
 # "n_tokens:readout:checkpoint_name"
+# Configs chosen from the local synthetic proof (validate_readout.py):
+#   - mean_std readout recovered the class signal (synthetic CLASS 0.36 -> 0.59)
+#     while KEEPING sector  -> the validated lever.
+#   - going to 64 tokens COLLAPSED sector to chance and did not help class, so the
+#     aggressive small-patch config is dropped. 32 is kept as a cautious hedge.
 CONFIGS=(
-  "16:mean_std:latent_jepa_ms16.pth"   # FIX1 only: per-segment std (recovers amplitude)
-  "32:mean_std:latent_jepa_ms32.pth"   # FIX1+2: std + smaller patches (top pick)
-  "64:mean_std:latent_jepa_ms64.pth"   # FIX1+2 aggressive: even finer patches
+  "16:mean_std:latent_jepa_ms16.pth"   # WINNER in synthetic: class up, sector kept
+  "32:mean_std:latent_jepa_ms32.pth"   # hedge: slightly smaller patches + std
   "16:mean:latent_jepa_baseline.pth"   # control: reproduces the ~0.42 baseline
 )
 
