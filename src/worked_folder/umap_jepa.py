@@ -20,7 +20,7 @@ from src.worked_folder.latent_jepa import build_latent_jepa
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
-CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa_transformer.pth"
+CHECKPOINT = "/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa_ms16.pth"
 OUT_DIR = "/orcd/scratch/orcd/006/diegogon/checkpoints"
 BATCH_SIZE = 256
 MARKERS = ["o", "s", "D", "^", "p", "H", "*", "X"]
