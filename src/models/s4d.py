@@ -222,9 +222,9 @@ class S4Model(nn.Module):
         
 class S4Classifier(nn.Module):
 
-    def __init__(self, d_input = 1, d_model = 256, n_layers = 4, dropout = 0.2, n_tokens = 4, token_dim = 16, n_classes = 8):
+    def __init__(self, d_input = 1, d_model = 256, n_layers = 4, dropout = 0.2, n_tokens = 4, token_dim = 16, n_classes = 8, readout = "mean"):
         super().__init__()
-        self.backbone = S4Model(d_input =d_input, d_model = d_model, n_layers = n_layers, dropout = dropout, n_tokens = n_tokens, token_dim = token_dim)
+        self.backbone = S4Model(d_input =d_input, d_model = d_model, n_layers = n_layers, dropout = dropout, n_tokens = n_tokens, token_dim = token_dim, readout = readout)
 
         self.head = nn.Linear(n_tokens * token_dim, n_classes)
     
