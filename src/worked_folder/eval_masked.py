@@ -17,7 +17,7 @@ from src.data.data import DualEvalDataset
 from src.worked_folder.masked_s4d import build_masked_s4d
 
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from sklearn.metrics import balanced_accuracy_score
 from sklearn.neighbors import KNeighborsClassifier
 
@@ -27,22 +27,36 @@ CHECKPOINT = os.environ.get("MASKED_CKPT", "/orcd/scratch/orcd/006/diegogon/chec
 BATCH_SIZE = 256
 
 
-def run_probe(X, y, name):
-    uni, counts = np.unique(y, return_counts=True)
-    keep = uni[counts >= 2]
+def run_probe(X, y, name, groups = None):
+
+    uniques, counts = np.unique(y, return_counts = True)
+
+    keep = uniques[counts >= 2]
     m = np.isin(y, keep)
     X, y = X[m], y[m]
 
-    x_train, x_test, y_train, y_test = train_test_split(X, y, test_size=0.2, stratify=y, random_state=0)
+    if groups is not None:
+        groups = groups[m]
+
+    if groups is not None:
+        splitter = GroupShuffleSplit(n_splits = 1, test_size = 0.2, random_state = 0)
+        train_idx, test_idx = next(splitter.split(X, y, groups))
+        x_train, x_test = X[train_idx], X[test_idx]
+        y_train, y_test = y[train_idx], y[test_idx]
+    else:
+
+        x_train, x_test, y_train, y_test = train_test_split(X, y, test_size = 0.2, stratify = y, random_state = 0)
+
     scaler = StandardScaler()
     x_train = scaler.fit_transform(x_train)
     x_test = scaler.transform(x_test)
 
-    probe = KNeighborsClassifier(n_neighbors=20)
+    probe = KNeighborsClassifier(n_neighbors = 20)
     probe.fit(x_train, y_train)
-    acc = balanced_accuracy_score(y_test, probe.predict(x_test))
+    accuracy = balanced_accuracy_score(y_test, probe.predict(x_test))
+
     chance = 1 / len(np.unique(y))
-    print(f"{name}: balanced accuracy = {acc:.6f} (chance = {chance:.4f})")
+    print(f"{name}: balanced accuracy = {accuracy:.6f} (chance ={chance:.4f})")
 
 
 print(f"device: {DEVICE}")
@@ -69,8 +83,9 @@ with torch.no_grad():
 latents = np.concatenate(latents)
 all_sectors = np.concatenate(all_sectors)
 all_labels = np.concatenate(all_labels)
+all_tics = dataset.df["TIC"].to_numpy()
 
 print(f"Mean std of latent (collapse check, want >> 0): {latents.std(0).mean():.6f}")
 
 run_probe(latents, all_sectors, "latent --> SECTOR (target, want high)")
-run_probe(latents, all_labels,  "latent --> CLASS")
+run_probe(latents, all_labels,  "latent --> CLASS", groups = all_tics)
