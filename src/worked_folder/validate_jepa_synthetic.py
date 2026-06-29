@@ -12,8 +12,8 @@ Run:  python -m src.bot_folder.validate_jepa_synthetic
 import numpy as np
 import torch
 
-from src.bot_folder.validate_synthetic import make_dataset, probe
-from src.bot_folder.latent_jepa import LatentJEPA, jepa_latent_loss
+from src.worked_folder.validate_synthetic import make_dataset, probe
+from src.worked_folder.latent_jepa import LatentJEPA, jepa_latent_loss
 
 # ----------------------------- config -----------------------------
 SEED = 0

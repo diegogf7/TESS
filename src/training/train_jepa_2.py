@@ -90,6 +90,6 @@ for epoch in range(EPOCHS):
             
     average_loss_val = val_total_loss / len(val_dataloader)
     print(f"Epoch {epoch+1} / {EPOCHS}, average loss: {average_loss_val:.6f}")
-
+    
 
     torch.save(model.state_dict(), '/orcd/scratch/orcd/006/diegogon/checkpoints/training_jepa2.pth')

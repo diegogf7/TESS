@@ -28,7 +28,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import balanced_accuracy_score
 
-from src.bot_folder.masked_s4d import MaskedS4D, masked_recon_loss
+from src.worked_folder.masked_s4d import MaskedS4D, masked_recon_loss
 
 # ----------------------------- config -----------------------------
 SEED = 0
