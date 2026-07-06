@@ -65,8 +65,8 @@ for epoch in range(EPOCHS):
             anchor_flux = anchor_flux.to(DEVICE)
             anchor_mask = anchor_mask.to(DEVICE)
 
-            same_sector_flux = same_sector_flux.to(DEVICE)
-            same_sector_mask = same_sector_mask.to(DEVICE)
+            ss_flux = ss_flux.to(DEVICE)
+            ss_mask = ss_mask.to(DEVICE)
 
             optimizer.zero_grad()
 
