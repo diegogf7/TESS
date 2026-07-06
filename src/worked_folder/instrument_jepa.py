@@ -63,15 +63,15 @@ class InstrumentJEPA(nn.Module):
         for online_p, target_p in zip(self.context_encoder.parameters(), self.target_encoder.parameters()):
             target_p.data = m * target_p.data + (1.0 - m) * online_p.data
 
-def instrument_jepa_loss(prediction, target, variable_weight = 0.0):
+def instrument_jepa_loss(prediction, target, var_weight = 0.0):
 
     loss = Functional.smooth_l1_loss(prediction, target)
 
-    if variable_weight > 0.0:
+    if var_weight > 0.0:
         flat = prediction.reshape(-1, prediction.shape[-1])
 
         std = flat.std(dim = 0)
-        loss = loss + variable_weight * torch.relu(1.0 - std).mean()
+        loss = loss + var_weight * torch.relu(1.0 - std).mean()
 
     return loss
 

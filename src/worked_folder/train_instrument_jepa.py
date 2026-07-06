@@ -86,4 +86,4 @@ for epoch in range(EPOCHS):
 
             best_val = average_val
             torch.save(model.state_dict(), CHECKPOINT)
-            print(f"saeved new best checkpoint (val {average_val:.6f}) --> {CHECKPOINT}")
+            print(f"saeved new best checkpoint (val {average_val:.6f}) --> {CHECKPOINT} ")
