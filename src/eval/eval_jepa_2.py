@@ -50,7 +50,7 @@ all_labels = np.concatenate(all_labels)
 
 keep = all_labels != 5
 target_latents = target_latents[keep]
-all_labels = all_labels[keep]
+all_labels = all_labels
 
 
 X_train, X_test, y_train, y_test = train_test_split(target_latents, all_labels, test_size =0.2, stratify = all_labels, random_state = 0)

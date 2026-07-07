@@ -11,8 +11,8 @@ BATCH_SIZE = 256
 EPOCHS = 100
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train.parquet"
-VAL_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val.parquet"
+DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
+VAL_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val_30min.parquet"
 
 
 dataset = ClassificationDataset(DATA_PATH, grid_length = 1024)
@@ -22,9 +22,22 @@ dataloader = DataLoader(dataset, batch_size = BATCH_SIZE, shuffle = True, num_wo
 
 val_dataloader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True, num_workers=4)
 
-model = S4Classifier(d_input = 1, n_classes = 8, d_model = 256, n_layers = 4, dropout = 0.2).to(DEVICE)
+model = S4Classifier(d_input = 1, d_model = 256, n_layers = 4, dropout = 0.2, n_tokens = 16, token_dim = 16, n_classes = 8, readout = "mean_std").to(DEVICE)
 
-optimizer = torch.optim.AdamW(model.parameters(), lr = 0.001)
+checkpoint = torch.load("/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa_ms16.pth", map_location=DEVICE)
+
+prefix = "target_encoder."
+backbone_sd = {k[len(prefix):]: v for k, v in checkpoint.items() if k.startswith(prefix)}
+missing, unexpected = model.backbone.load_state_dict(backbone_sd, strict = True)
+print("backbone load — missing:", missing, "| unexpected:", unexpected)  # want both []
+
+optimizer = torch.optim.AdamW([
+    {"params": model.backbone.parameters(), "lr": 1e-4},
+    {"params": model.head.parameters(), "lr": 1e-3}
+], weight_decay = 0.01 )
+
+
+
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max = EPOCHS)
 
 criteria = nn.CrossEntropyLoss()
@@ -116,4 +129,4 @@ for epoch in range(EPOCHS):
 
 
 
-    torch.save(model.state_dict(), '/orcd/scratch/orcd/006/diegogon/checkpoints/s4d_classification.pth')
+    torch.save(model.state_dict(), '/orcd/scratch/orcd/006/diegogon/checkpoints/jepa_finetune_ms16.pth')

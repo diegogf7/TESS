@@ -2,7 +2,8 @@ import torch
 import torch.nn as nn
 
 from src.data.data import DisentanglementDataset, DataLoader
-from src.models.jepa_2 import JEPA_2, jepa_loss, variance_loss
+from src.models.jepa_1 import JEPA_1, jepa_loss
+from src.models.jepa_dual import DualJEPA
 
 BATCH_SIZE = 256
 EPOCHS = 100
@@ -12,14 +13,14 @@ DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classifi
 VAL_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val.parquet"
 
 
-dataset = DisentanglementDataset(DATA_PATH, grid_length =1024, multi_sector_only=True)
+dataset = DisentanglementDataset(DATA_PATH, grid_length =1024, multi_sector_only = True)
 dataloader = DataLoader(dataset, batch_size = BATCH_SIZE, shuffle = True, num_workers = 4)
 
 val_dataset = DisentanglementDataset(VAL_PATH, grid_length = 1024, multi_sector_only = True)
 val_dataloader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = True, num_workers = 4)
 
 
-model = JEPA_2(d_model = 256, n_layers =4, dropout = 0.2, momentum = 0.996).to(DEVICE)
+model = DualJEPA(d_model = 256, n_layers =4, dropout = 0.2, momentum = 0.996).to(DEVICE)
 #we're only going to train our online encoder not the EMA
 
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr = 0.001)
@@ -35,17 +36,19 @@ for epoch in range(EPOCHS):
         anchor_mask = anchor_mask.to(DEVICE)
         same_star_flux = same_star_flux.to(DEVICE)
         same_star_mask = same_star_mask.to(DEVICE)
+        same_sector_flux = same_sector_flux.to(DEVICE)
+        same_sector_mask = same_sector_mask.to(DEVICE)
 
         anchor_flux = anchor_flux.unsqueeze(-1)
         same_star_flux = same_star_flux.unsqueeze(-1)
+        same_sector_flux = same_sector_flux.unsqueeze(-1)
 
         optimizer.zero_grad()
 
-        #context is the different star and then the target is the anchor (so flipped)
 
-        prediction, z_target, z_context = model(same_star_flux, same_star_mask, anchor_flux, anchor_mask)
+        prediction, target = model(anchor_flux, anchor_mask, same_star_flux, same_star_mask, same_sector_flux, same_sector_mask)
 
-        loss = jepa_loss(prediction, z_target) + 1.0 * variance_loss(z_context)
+        loss = jepa_loss(prediction, target)
 
         loss.backward()
         optimizer.step()
@@ -73,15 +76,16 @@ for epoch in range(EPOCHS):
             anchor_mask = anchor_mask.to(DEVICE)
             same_star_flux = same_star_flux.to(DEVICE)
             same_star_mask = same_star_mask.to(DEVICE)
+            same_sector_flux = same_sector_flux.to(DEVICE)
+            same_sector_mask = same_sector_mask.to(DEVICE)
 
             anchor_flux = anchor_flux.unsqueeze(-1)
             same_star_flux = same_star_flux.unsqueeze(-1)
+            same_sector_flux = same_sector_flux.unsqueeze(-1)
 
-            prediction, z_target, _ = model(same_star_flux, same_star_mask, anchor_flux, anchor_mask)
-
-
+            prediction, target = model(anchor_flux, anchor_mask, same_star_flux, same_star_mask, same_sector_flux, same_sector_mask)
             #forwards process now
-            loss = jepa_loss(prediction, z_target)
+            loss = jepa_loss(prediction, target)
 
             val_total_loss += loss.item()
 
@@ -90,6 +94,6 @@ for epoch in range(EPOCHS):
             
     average_loss_val = val_total_loss / len(val_dataloader)
     print(f"Epoch {epoch+1} / {EPOCHS}, average loss: {average_loss_val:.6f}")
-    
 
-    torch.save(model.state_dict(), '/orcd/scratch/orcd/006/diegogon/checkpoints/training_jepa2.pth')
+
+    torch.save(model.state_dict(), '/orcd/scratch/orcd/006/diegogon/checkpoints/training_jepa_dual.pth')
