@@ -65,6 +65,32 @@ class LatentPredictor(nn.Module):
         return self.out_projection(x)
 
 
+class MLPPredictor(nn.Module):
+
+    def __init__(self, n_tokens = 16, token_dimension = 16, hidden_dimension = 128, depth = 2):
+        super().__init__()
+
+        self.in_projection = nn.Linear(token_dimension, hidden_dimension)
+        self.position_embedding = nn.Parameter(torch.randn(1, n_tokens, hidden_dimension) * 0.02)
+
+        layers = []
+
+        for _ in range(depth):
+            layers = layers + [nn.Linear(hidden_dimension, hidden_dimension), nn.GELU()]
+        
+        self.body = nn.Sequential(*layers) #the asterik just spreads out what we already have within
+
+        self.out_projection = nn.Linear(hidden_dimension, token_dimension)
+
+    def forward(self, context_tokens):
+
+        x = self.in_projection(context_tokens) + self.position_embedding
+        x = self.body(x)
+
+        return self.out_projection(x)
+
+
+
 
 class LatentJEPA(nn.Module):
     def __init__(
@@ -78,6 +104,7 @@ class LatentJEPA(nn.Module):
         mask_ratio=0.5,
         momentum=0.996,
         readout="mean",
+        predictor = "transformer"
     ):
         super().__init__()
         self.n_tokens = n_tokens
@@ -97,7 +124,9 @@ class LatentJEPA(nn.Module):
         for p in self.target_encoder.parameters():
             p.requires_grad = False
 
-        self.predictor = LatentPredictor(n_tokens, token_dim)
+        self.predictor = (
+            MLPPredictor(n_tokens, token_dim) if predictor == "mlp" else LatentPredictor(n_tokens, token_dim)
+        )
 
     def sample_segment_mask(self, batch_size, device):
         """1 = hidden segment (a prediction target), 0 = visible context."""
@@ -152,24 +181,14 @@ def jepa_latent_loss(pred, tgt, seg_mask, var_weight=0.0):
 
 
 def build_latent_jepa():
-    """Shared architecture for train + eval so the checkpoint can't drift.
-
-    Config is read from env vars so the cluster runner can sweep configs without
-    editing source (and train/eval always agree). Defaults reproduce the original
-    MLP/transformer model exactly:
-        JEPA_NTOKENS    (default 16)   more tokens = smaller segments = resolves
-                                        faster oscillations (class signal)
-        JEPA_TOKENDIM   (default 16)
-        JEPA_READOUT    (default mean) "mean_std" keeps per-segment std so
-                                        sub-segment class amplitude survives pooling
-        JEPA_MASK_RATIO (default 0.5)
-    """
+    
     return LatentJEPA(
-        grid_length=1024,
-        n_tokens=int(os.environ.get("JEPA_NTOKENS", "16")),
-        token_dim=int(os.environ.get("JEPA_TOKENDIM", "16")),
-        d_model=256, n_layers=4, dropout=0.2,
-        mask_ratio=float(os.environ.get("JEPA_MASK_RATIO", "0.5")),
-        momentum=0.996,
-        readout=os.environ.get("JEPA_READOUT", "mean"),
+        grid_length = 1024,
+        n_tokens = int(os.environ.get("JEPA_NTOKENS", "16")),
+        token_dim = int(os.environ.get("JEPA_TOKENDIM", "16")),
+        d_model = 256, n_layers=4, dropout=0.2,
+        mask_ratio = float(os.environ.get("JEPA_MASK_RATIO", "0.5")),
+        momentum =0.996,
+        readout = os.environ.get("JEPA_READOUT", "mean"),
+        predictor = os.environ.get("JEPA_PREDICTOR", "transformer"),
     )
