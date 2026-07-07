@@ -6,7 +6,6 @@
 #SBATCH -t 03:00:00
 #SBATCH -o finetune_check_%j.out
 
-# --- fine-tune (ms16 init) vs from-scratch control, same data + arch ---
 cd /orcd/scratch/orcd/006/diegogon/TESS
 
 conda activate lightcurve || source activate lightcurve
@@ -16,12 +15,12 @@ nvidia-smi
 
 mkdir -p /orcd/scratch/orcd/006/diegogon/checkpoints
 
-echo "=== A: fine-tune from ms16 JEPA init ==="
+echo "1: fine-tune from ms16 JEPA init "
 FINETUNE_INIT=jepa FINETUNE_CKPT=/orcd/scratch/orcd/006/diegogon/checkpoints/ft_jepa_init.pth \
     python -m src.finetune_check.train_finetune
 
-echo "=== B: from-scratch control (same arch, same data) ==="
+echo "2: from-scratch control (same arch, same data)"
 FINETUNE_INIT=random FINETUNE_CKPT=/orcd/scratch/orcd/006/diegogon/checkpoints/ft_random_init.pth \
     python -m src.finetune_check.train_finetune
 
-echo "=== DONE ==="
+echo "finished "
