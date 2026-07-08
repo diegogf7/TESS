@@ -103,7 +103,7 @@ class DisentanglementDataset(Dataset):
     def __init__(self, parquet, grid_length = 1024,multi_sector_only = False, split_gaps = False):
         self.df = pd.read_parquet(parquet)
         self.grid_length = grid_length
-        
+        self.split_gaps = split_gaps
 
         #I don't know how to do this properly
         self.tic_to_indices = {tic: list(indices) for tic, indices in self.df.groupby('TIC').groups.items()}
@@ -127,12 +127,14 @@ class DisentanglementDataset(Dataset):
 
         row = self.df.iloc[idx]
         time = np.array(row["time"])
+        flux = np.array(row["flux"])
+
 
         if self.split_gaps:
             time, flux = pick_observed_segment(time, flux, random_pick = True)
 
-        flux = normalize(np.array(row["flux"]))
-        grid_flux, mask = resample_to_grid(np.array(row['time']), flux, self.grid_length)
+        flux = normalize(flux)
+        grid_flux, mask = resample_to_grid(time, flux, self.grid_length)
         flux_tensor = torch.tensor(grid_flux, dtype = torch.float32)
         mask_tensor = torch.tensor(mask, dtype = torch.float32)
         return flux_tensor, mask_tensor
@@ -197,6 +199,7 @@ class DualEvalDataset(Dataset):
     def __init__(self, parquet, grid_length = 1024, split_gaps = False):
         self.df = pd.read_parquet(parquet)
         self.grid_length = grid_length
+        self.split_gaps = split_gaps
 
 
     def __len__(self):
@@ -205,13 +208,13 @@ class DualEvalDataset(Dataset):
     def __getitem__(self, idx):
 
         row = self.df.iloc[idx]
-        flux = normalize(np.array(row["flux"]))
         time = np.array(row["time"])
+        flux = np.array(row["flux"])
         if self.split_gaps:
             time, flux = pick_observed_segment(time, flux, random_pick = False)
 
-
-        grid_flux, observed = resample_to_grid(np.array(row["time"]), flux, self.grid_length)
+        flux = normalize(flux)
+        grid_flux, observed = resample_to_grid(time, flux, self.grid_length)
         grid_flux = torch.tensor(grid_flux, dtype = torch.float32)
         observed = torch.tensor(observed, dtype = torch.float32)
         sector = torch.tensor(int(row["sector"]))

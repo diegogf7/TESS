@@ -15,6 +15,9 @@ from sklearn.model_selection import train_test_split, GroupShuffleSplit
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
 CHECKPOINT = os.environ.get("JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/instrument_jepa.pth")
+SPLIT_GAPS = os.environ.get("JEPA_SPLIT_GAPS", "0") == "1"
+
+
 BATCH_SIZE = 256
 
 
@@ -49,7 +52,7 @@ def run_probe(X, y, name, groups=None):
 
 
 print(f"device: {DEVICE}")
-dataset = DualEvalDataset(DATA_PATH, 1024)
+dataset = DualEvalDataset(DATA_PATH, 1024, split_gaps = SPLIT_GAPS)
 loader = DataLoader(dataset, BATCH_SIZE, shuffle = False, num_workers = 2)
 print(f"{len(dataset)} samples, {len(loader)} batches")
 

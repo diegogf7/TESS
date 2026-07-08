@@ -13,11 +13,14 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
 VAL_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val_30min.parquet"
 CHECKPOINT = os.environ.get("JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/instrument_jepa.pth")
+SPLIT_GAPS = os.environ.get("JEPA_SPLIT_GAPS", "0") == "1"
 
-dataset = DisentanglementDataset(DATA_PATH, grid_length=1024)
+
+dataset = DisentanglementDataset(DATA_PATH, grid_length=1024, split_gaps=SPLIT_GAPS)
+
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 
-val_dataset = DisentanglementDataset(VAL_PATH, grid_length=1024)
+val_dataset = DisentanglementDataset(VAL_PATH, grid_length=1024, split_gaps=SPLIT_GAPS)
 val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 model = build_instrument_jepa().to(DEVICE)
 
