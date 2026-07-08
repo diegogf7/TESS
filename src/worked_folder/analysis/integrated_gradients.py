@@ -39,6 +39,7 @@ latents = []
 all_sectors = []
 all_flux = []
 all_mask = []
+all_labels = []
 
 with torch.no_grad():
 
@@ -51,6 +52,7 @@ with torch.no_grad():
         all_sectors.append(sector.numpy())
         all_flux.append(flux.cpu().numpy())
         all_mask.append(mask.cpu().numpy())
+        all_labels.append(label.numpy())
 
         if i % 10 == 0:
             print(f" extracting batch {i} / {len(loader)}")
@@ -67,6 +69,9 @@ sectors = sectors[keep]
 fluxes = fluxes[keep]
 masks = masks[keep]
 
+labels = np.concatenate(all_labels)
+labels = labels[keep]
+
 index = np.arange(len(all_latents))
 index_train, index_test = train_test_split(index, test_size = 0.2, stratify = sectors, random_state = 0)
 
@@ -82,6 +87,12 @@ mask_probe = LogisticRegression(max_iter = 2000, class_weight = "balanced").fit(
 mask_accuracy = balanced_accuracy_score(sectors[index_test], mask_probe.predict(masks[index_test]))
 
 print(f"MASK-ONLY balanced accuracy: {mask_accuracy:.5f} (latent probe: {accuracy:.5f})")
+
+label_probe = LogisticRegression(max_iter = 2000, class_weight = "balanced").fit(masks[index_train], labels[index_train])
+label_accuracy = balanced_accuracy_score(labels[index_test], label_probe.predict(masks[index_test]))
+
+print(f"MASK-ONLY class accuracy: {label_accuracy:.5f} (chance: {1/len(np.unique(labels)):.5f})")
+
 
 correct_index = index_test[test_predictions == sectors[index_test]]
 ig_index = correct_index
