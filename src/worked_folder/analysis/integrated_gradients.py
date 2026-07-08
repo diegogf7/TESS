@@ -78,10 +78,15 @@ accuracy = balanced_accuracy_score(sectors[index_test], test_predictions)
 
 print(f"Balanced probe accuracy: {accuracy:.5f} (around 80 percent needed)")
 
+mask_probe = LogisticRegression(max_iter = 2000, class_weight = "balanced").fit(masks[index_train], sectors[index_train])
+mask_accuracy = balanced_accuracy_score(sectors[index_test], mask_probe.predict(masks[index_test]))
+
+print(f"MASK-ONLY balanced accuracy: {mask_accuracy:.5f} (latent probe: {accuracy:.5f})")
+
 correct_index = index_test[test_predictions == sectors[index_test]]
 ig_index = correct_index
 
-#now I need to probe torch
+#now I need to probe torch 
 
 W = torch.tensor(probe.coef_, dtype = torch.float32, device = DEVICE)
 b = torch.tensor(probe.intercept_, dtype = torch.float32, device = DEVICE)
