@@ -100,7 +100,7 @@ class ClassificationDataset(Dataset):
 
     
 class DisentanglementDataset(Dataset):
-    def __init__(self, parquet, grid_length = 1024,multi_sector_only = False):
+    def __init__(self, parquet, grid_length = 1024,multi_sector_only = False, split_gaps = False):
         self.df = pd.read_parquet(parquet)
         self.grid_length = grid_length
         
@@ -126,6 +126,11 @@ class DisentanglementDataset(Dataset):
     def load_curve(self, idx):
 
         row = self.df.iloc[idx]
+        time = np.array(row["time"])
+
+        if self.split_gaps:
+            time, flux = pick_observed_segment(time, flux, random_pick = True)
+
         flux = normalize(np.array(row["flux"]))
         grid_flux, mask = resample_to_grid(np.array(row['time']), flux, self.grid_length)
         flux_tensor = torch.tensor(grid_flux, dtype = torch.float32)
@@ -189,7 +194,7 @@ class SectorDataset(Dataset):
         return grid_flux, observed, sector 
         
 class DualEvalDataset(Dataset):
-    def __init__(self, parquet, grid_length = 1024):
+    def __init__(self, parquet, grid_length = 1024, split_gaps = False):
         self.df = pd.read_parquet(parquet)
         self.grid_length = grid_length
 
@@ -201,6 +206,11 @@ class DualEvalDataset(Dataset):
 
         row = self.df.iloc[idx]
         flux = normalize(np.array(row["flux"]))
+        time = np.array(row["time"])
+        if self.split_gaps:
+            time, flux = pick_observed_segment(time, flux, random_pick = False)
+
+
         grid_flux, observed = resample_to_grid(np.array(row["time"]), flux, self.grid_length)
         grid_flux = torch.tensor(grid_flux, dtype = torch.float32)
         observed = torch.tensor(observed, dtype = torch.float32)
@@ -210,6 +220,24 @@ class DualEvalDataset(Dataset):
         return grid_flux, observed, sector, label
     
 
+def pick_observed_segment(time, flux, gap_days = 0.5, min_points = 200, random_pick = True):
+
+    breaks = np.where(np.diff(time) > gap_days)[0]
+    segments = np.split(np.arange(len(time)), breaks + 1)
+
+    good = [s for s in segments if len(s) >= min_points]
+
+    if len(good) == 0:
+
+        good = [max(segments, key = len)]
+    
+    if random_pick:
+        segment = good[np.random.randint(len(good))]
+
+    else:
+        segment = max(good, key = len)
+
+    return time[segment], flux[segment]
 
 
 #code from claude code to make sure I get the right file names for the training
