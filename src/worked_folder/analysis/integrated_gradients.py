@@ -170,15 +170,21 @@ for k in range(min(N_SHOWS, len(ig_index))):
 
 
 integrated_sectors = sectors[ig_index]
+
 sector_unique = np.unique(integrated_sectors)
+
+for s in sector_unique:
+    m = integrated_sectors == s
+
+    print(f"sector {s}: n = {m.sum():3d} mean attribute = {np.abs(attributions[m]).mean():.5f} mean score difference = {score_diffs[m].mean():.3f}")
 
 mean_maps = np.stack([np.abs(attributions)[integrated_sectors == s].mean(axis = 0) for s in sector_unique])
 
 figure, axis =plt.subplots(figsize = (10, 0.35 * len(sector_unique) + 2))
 
-vmax = np.abs(mean_maps).max()
+vmax = np.percentile(mean_maps, 99)
 
-importa = axis.imshow(mean_maps, aspect = "auto", cmap = "RdBu_r", vmin = -vmax, vmax = vmax, extent = (0, GRID, len(sector_unique) - 0.5, -0.5))
+importa = axis.imshow(mean_maps, aspect = "auto", cmap = "viridis", vmin = 0, vmax = vmax, extent = (0, GRID, len(sector_unique) - 0.5, -0.5))
 
 axis.set_yticks(range(len(sector_unique)))
 axis.set_yticklabels(sector_unique, fontsize = 5)
