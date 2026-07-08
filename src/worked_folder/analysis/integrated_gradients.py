@@ -96,6 +96,13 @@ def sector_logit(flux_batch, mask_batch, column):
     a = (a - z)
     a = a / k
 
+    weights = x[column]
+    bias_class = y[column]
+
+    score = (a * weights).sum(dim = 1) + bias_class
+
+    return score
+
     
 
 alphas = torch.linspace(0.0, 1.0, STEPS, device = DEVICE).view(-1, 1)
@@ -109,4 +116,4 @@ for k, di in enumerate(ig_index):
     mask_t = torch.from_numpy(masks[di]).to(DEVICE)
 
     true_column = int(np.where(probe.classes_ == sectors[di])[0][0])
-    
+
