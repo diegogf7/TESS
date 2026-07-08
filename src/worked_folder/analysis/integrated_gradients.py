@@ -172,7 +172,7 @@ for k in range(min(N_SHOWS, len(ig_index))):
 integrated_sectors = sectors[ig_index]
 sector_unique = np.unique(integrated_sectors)
 
-mean_maps = np.stack([attributions[integrated_sectors == s].mean(axis= 0) for s in sector_unique])
+mean_maps = np.stack([np.abs(attributions)[integrated_sectors == s].mean(axis = 0) for s in sector_unique])
 
 figure, axis =plt.subplots(figsize = (10, 0.35 * len(sector_unique) + 2))
 
