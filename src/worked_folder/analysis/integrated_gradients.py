@@ -79,25 +79,25 @@ accuracy = balanced_accuracy_score(sectors[index_test], test_predictions)
 print(f"Balanced probe accuracy: {accuracy:.5f} (around 80 percent needed)")
 
 correct_index = index_test[test_predictions == sectors[index_test]]
-ig_index = random_number.choice(correct_index, size = min(INTEGRATED_CURVES, len(correct_index)))
+ig_index = random_number.choice(correct_index, size = min(INTEGRATED_CURVES, len(correct_index)), replace = False)
 
 #now I need to probe torch
 
-x = torch.tensor(probe.coef_, dtype = torch.float32, device = DEVICE)
-y = torch.tensor(probe.intercept_, dtype = torch.float32, device = DEVICE)
-z = torch.tensor(probe.mean_, dtype = torch.float32, device = DEVICE)
-k = torch.tensor(scaler.scale_, dtype = torch.float32, device = DEVICE)
+W = torch.tensor(probe.coef_, dtype = torch.float32, device = DEVICE)
+b = torch.tensor(probe.intercept_, dtype = torch.float32, device = DEVICE)
+mu = torch.tensor(scaler.mean_, dtype = torch.float32, device = DEVICE)
+sd = torch.tensor(scaler.scale_, dtype = torch.float32, device = DEVICE)
 
 def sector_logit(flux_batch, mask_batch, column):
 
     a = model.target_encoder(flux_batch.unsqueeze(-1), mask_batch)
 
-    a = z.reshape(z.shape[0], -1)
-    a = (a - z)
-    a = a / k
+    a = a.reshape(a.shape[0], -1)
+    a = (a - mu)
+    a = a / sd
 
-    weights = x[column]
-    bias_class = y[column]
+    weights = W[column]
+    bias_class = b[column]
 
     score = (a * weights).sum(dim = 1) + bias_class
 
@@ -110,6 +110,8 @@ alphas = torch.linspace(0.0, 1.0, STEPS, device = DEVICE).view(-1, 1)
 attributions = np.zeros((len(ig_index), GRID))
 complete_gaps = np.zeros(len(ig_index))
 
+
+score_diffs = np.zeros(len(ig_index))
 for k, di in enumerate(ig_index):
 
     flux_t = torch.from_numpy(fluxes[di]).to(DEVICE)
@@ -133,15 +135,20 @@ for k, di in enumerate(ig_index):
     
     complete_gaps[k] = ig.sum() - (s_x - s_0)
 
+    score_diffs[k] = s_x - s_0
+
     if k % 20 == 0:
         print(f" Integrated gradient curve {k} / {len(ig_index)}")
 
 
 print(f"mean completeness gap = {np.abs(complete_gaps).mean():.5f}")
-print(f"mean score(x) - score(0) = {np.abs(complete_gaps + 0).mean():.5f}")
+print(f"mean score(x) - score(0) = {np.abs(score_diffs).mean():.5f}")
+
+
 
 for k in range(min(N_SHOWS, len(ig_index))):
 
+    
     di = ig_index[k]
 
     figure, (ax0, ax1) = plt.subplots(2, 1, figsize = (10, 5), sharex = True, gridspec_kw = {"height_ratios": [2, 1]})
@@ -149,7 +156,7 @@ for k in range(min(N_SHOWS, len(ig_index))):
     ax0.plot(fluxes[di], ".", ms = 3)
     ax0.set_ylabel("normalized flux")
 
-    ax0.set_title(f"sector {sector[di]} score(x) - score(0) = {score_diffs[k]:.2f}", fontsize = 10)
+    ax0.set_title(f"sector {sectors[di]} score(x) - score(0) = {score_diffs[k]:.2f}", fontsize = 10)
 
     ax1.fill_between(np.arange(GRID), attributions[k], 0.0, color = "blue", alpha = 0.4)
     ax1.set_ylabel("Integrated gradient attribution")
@@ -159,4 +166,26 @@ for k in range(min(N_SHOWS, len(ig_index))):
     figure.savefig(os.path.join(OUT_DIR, f"ig_curve_{k}.png"), dpi = 150)
 
     plt.close(figure)
+
+
+
+integrated_sectors = sectors[ig_index]
+sector_unique = np.unique(integrated_sectors)
+
+mean_maps = np.stack([attributions[integrated_sectors == s].mean(axis= 0) for s in sector_unique])
+
+figure, axis =plt.subplots(figsize = (10, 0.35 * len(sector_unique) + 2))
+
+vmax = np.abs(mean_maps).max()
+
+importa = axis.imshow(mean_maps, aspect = "auto", cmap = "RdBu_r", vmin = -vmax, vmax = vmax, extent = (0, GRID, len(sector_unique) - 0.5, -0.5))
+
+axis.set_yticks(range(len(sector_unique)))
+axis.set_yticklabels(sector_unique, fontsize = 5)
+axis.set_xlabel("grid index")
+axis.set_ylabel("sector")
+
+axis.set_title("mean integrated per sector")
+figure.colorbar(importa, ax = axis, fraction = 0.025)
+figure.savefig(os.path.join(OUT_DIR, "integrated_gradient_heatmap.png"), dpi = 150)
 
