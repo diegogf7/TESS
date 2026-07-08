@@ -79,7 +79,7 @@ accuracy = balanced_accuracy_score(sectors[index_test], test_predictions)
 print(f"Balanced probe accuracy: {accuracy:.5f} (around 80 percent needed)")
 
 correct_index = index_test[test_predictions == sectors[index_test]]
-ig_index = random_number.choice(correct_index, size = min(INTEGRATED_CURVES, len(correct_index)), replace = False)
+ig_index = correct_index
 
 #now I need to probe torch
 
@@ -90,18 +90,16 @@ sd = torch.tensor(scaler.scale_, dtype = torch.float32, device = DEVICE)
 
 def sector_logit(flux_batch, mask_batch, column):
 
+    #needed to try to change this because I was getting negative scores for my testing
     a = model.target_encoder(flux_batch.unsqueeze(-1), mask_batch)
 
     a = a.reshape(a.shape[0], -1)
-    a = (a - mu)
-    a = a / sd
 
-    weights = W[column]
-    bias_class = b[column]
+    a = (a - mu) / sd
 
-    score = (a * weights).sum(dim = 1) + bias_class
-
-    return score
+    logits = a @ W.T + b 
+    
+    return torch.log_softmax(logits, dim = 1)[:, column]
 
     
 
