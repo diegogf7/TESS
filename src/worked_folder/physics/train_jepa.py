@@ -19,8 +19,9 @@ EPOCHS = 100
 VAR_WEIGHT = 0.05  # gentle anti-collapse safety net
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
-VAL_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val_30min.parquet"
+DATA_PATH = os.environ.get("JEPA_DATA", "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet")
+VAL_PATH  = os.environ.get("JEPA_VAL",  "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val_30min.parquet")
+
 CHECKPOINT = os.environ.get("JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa_transformer.pth")
 print(f"config: NTOKENS={os.environ.get('JEPA_NTOKENS','16')} READOUT={os.environ.get('JEPA_READOUT','mean')} "
       f"MASK_RATIO={os.environ.get('JEPA_MASK_RATIO','0.5')} -> {CHECKPOINT}")
