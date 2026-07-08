@@ -12,7 +12,7 @@ OUT_TRAIN = os.path.join(FITS_ROOT, "tglc_pretrain_train.parquet")
 OUT_VALIDATION = os.path.join(FITS_ROOT, "tglc_pretrain_val.parquet")
 
 FLUX_COL = "cal_aper_flux"
-MIN_COVERAGE = 0.8
+MIN_COVERAGE = 0.0
 MIN_POINTS = 200
 VAL_FRACTION = 0.02
 N_WORKERS = 16
