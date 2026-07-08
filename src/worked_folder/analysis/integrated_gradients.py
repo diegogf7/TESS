@@ -117,3 +117,46 @@ for k, di in enumerate(ig_index):
 
     true_column = int(np.where(probe.classes_ == sectors[di])[0][0])
 
+    path = (alphas * flux_t.unsqueeze(0)).detach().requires_grad_(True)
+    logits = sector_logit(path, mask_t.unsqueeze(0).repeat(STEPS, 1), true_column)
+
+    logits.sum().backward()
+
+    ig = (flux_t * path.grad.mean(dim = 0)).detach().cpu().numpy()
+
+    attributions[k] = ig
+
+    with torch.no_grad():
+
+        s_x = sector_logit(flux_t.unsqueeze(0), mask_t.unsqueeze(0), true_column).item()
+        s_0 = sector_logit(torch.zeros_like(flux_t).unsqueeze(0), mask_t.unsqueeze(0), true_column).item()
+    
+    complete_gaps[k] = ig.sum() - (s_x - s_0)
+
+    if k % 20 == 0:
+        print(f" Integrated gradient curve {k} / {len(ig_index)}")
+
+
+print(f"mean completeness gap = {np.abs(complete_gaps).mean():.5f}")
+print(f"mean score(x) - score(0) = {np.abs(complete_gaps + 0).mean():.5f}")
+
+for k in range(min(N_SHOWS, len(ig_index))):
+
+    di = ig_index[k]
+
+    figure, (ax0, ax1) = plt.subplots(2, 1, figsize = (10, 5), sharex = True, gridspec_kw = {"height_ratios": [2, 1]})
+
+    ax0.plot(fluxes[di], ".", ms = 3)
+    ax0.set_ylabel("normalized flux")
+
+    ax0.set_title(f"sector {sector[di]} score(x) - score(0) = {score_diffs[k]:.2f}", fontsize = 10)
+
+    ax1.fill_between(np.arange(GRID), attributions[k], 0.0, color = "blue", alpha = 0.4)
+    ax1.set_ylabel("Integrated gradient attribution")
+    ax1.set_xlabel("grid index")
+
+    figure.tight_layout()
+    figure.savefig(os.path.join(OUT_DIR, f"ig_curve_{k}.png"), dpi = 150)
+
+    plt.close(figure)
+
