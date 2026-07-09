@@ -33,3 +33,7 @@ target_observed[:, 3] += 100.0
 assert not torch.isclose(baseline, instrument_jepa_loss(prediction, target_observed, target_mask = mask)), "observed token ignored"
 
 print("gap tokens contribute nothing and observed tokens will count")
+
+
+with_var = instrument_jepa_loss(prediction, target, target_mask = mask, var_weight = 0.1)
+assert with_var > baseline, "var term should ADD to the loss, not replace it"

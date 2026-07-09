@@ -65,7 +65,7 @@ class InstrumentJEPA(nn.Module):
 
 def instrument_jepa_loss(prediction, target, target_mask = None, var_weight = 0.0):
 
-    per_token = Functional.smooth_l1_loss(prediction, target, target_mask = None, var_weight = 0.0)
+    per_token = Functional.smooth_l1_loss(prediction, target, reduction = "none").mean(dim = -1)
 
     if target_mask is None:
 
@@ -82,7 +82,7 @@ def instrument_jepa_loss(prediction, target, target_mask = None, var_weight = 0.
 
         standard_deviation = flat.std(dim = 0)
 
-        loss = loss = var_weight * torch.relu(1.0 - standard_deviation).mean()
+        loss = loss + var_weight * torch.relu(1.0 - standard_deviation).mean()
 
 
     return loss
