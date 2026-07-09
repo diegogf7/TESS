@@ -35,7 +35,7 @@ val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, n
 model = build_latent_jepa().to(DEVICE)
 
 # only the context encoder + predictor train; the EMA target is frozen
-optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
+optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=3e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
 best_val = float("inf")

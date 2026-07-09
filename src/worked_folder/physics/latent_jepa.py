@@ -102,7 +102,7 @@ class LatentJEPA(nn.Module):
         n_layers=4,
         dropout=0.2,
         mask_ratio=0.5,
-        momentum=0.996,
+        momentum=0.9997,
         readout="mean",
         predictor = "transformer"
     ):
