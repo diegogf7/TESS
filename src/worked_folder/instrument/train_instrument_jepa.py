@@ -7,7 +7,7 @@ from src.worked_folder.instrument.instrument_jepa import build_instrument_jepa, 
 
 BATCH_SIZE = 256
 EPOCHS = 100
-VAR_WEIGHT = 0.0  # per-sector collapse is DESIRED; only raise this if latent std -> 0
+VAR_WEIGHT = 0.1  
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
