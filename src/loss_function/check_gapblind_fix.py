@@ -66,8 +66,11 @@ def mini_train(var_weight, steps=600):
         model.update_target()
     model.eval()
     with torch.no_grad():
-        online_std = ctx_tok.std(dim=0).mean().item()   # what the penalty acts on
         filled, _ = infill_gaps(flux, mask)
+        # EVAL-mode online spread: dropout (or any train-time noise) cannot
+        # fake this -- it must come from real curve-to-curve information.
+        eval_ctx = model.context_encoder(filled.unsqueeze(-1), None)
+        online_std = eval_ctx.std(dim=0).mean().item()
         z = model.encode(filled, None)                   # EMA target = what the probe sees
         ema_std = z.reshape(B, -1).std(dim=0).mean().item()
     return online_std, ema_std, loss.item()

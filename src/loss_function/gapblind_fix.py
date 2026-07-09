@@ -74,9 +74,14 @@ def gapblind_loss(prediction, target, context_tokens, target_mask=None, var_weig
 
 
 def build_gapblind_jepa():
+    # dropout MUST be 0 here. With dropout on, every curve gets a different
+    # random mask in train mode, so the encoder can satisfy the spread penalty
+    # by amplifying dropout NOISE instead of encoding curve information --
+    # measured in job 17561467 (w=0.5 arm): train loss 0.28 vs val 6.86,
+    # eval-mode std still 0.005. No dropout = no noise channel to cheat with.
     return GapBlindInstrumentJEPA(
         n_tokens=int(os.environ.get("JEPA_NTOKENS", "16")),
         token_dimension=int(os.environ.get("JEPA_TOKENDIM", "16")),
-        d_model=256, n_layers=4, dropout=0.2, momentum=0.996,
+        d_model=256, n_layers=4, dropout=0.0, momentum=0.996,
         readout=os.environ.get("JEPA_READOUT", "mean"),
     )
