@@ -13,14 +13,13 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
 VAL_PATH  = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val_30min.parquet"
 CHECKPOINT = os.environ.get("JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/instrument_jepa.pth")
-SPLIT_GAPS = os.environ.get("JEPA_SPLIT_GAPS", "0") == "1"
 
 
-dataset = DisentanglementDataset(DATA_PATH, grid_length=1024, split_gaps=SPLIT_GAPS)
+dataset = DisentanglementDataset(DATA_PATH, grid_length=1024)
 
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 
-val_dataset = DisentanglementDataset(VAL_PATH, grid_length=1024, split_gaps=SPLIT_GAPS)
+val_dataset = DisentanglementDataset(VAL_PATH, grid_length=1024)
 val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 model = build_instrument_jepa().to(DEVICE)
 
@@ -45,7 +44,7 @@ for epoch in range(EPOCHS):
         optimizer.zero_grad()
 
         prediction, target = model(same_sector_flux, same_sector_mask, anchor_flux, anchor_mask)
-        loss = instrument_jepa_loss(prediction, target, var_weight = VAR_WEIGHT)
+        loss = instrument_jepa_loss(prediction, target, target_mask = anchor_mask, var_weight = VAR_WEIGHT)
 
         loss.backward()
         optimizer.step()
@@ -74,7 +73,7 @@ for epoch in range(EPOCHS):
             optimizer.zero_grad()
 
             prediction, target = model(same_sector_flux, same_sector_mask, anchor_flux, anchor_mask)
-            loss = instrument_jepa_loss(prediction, target, var_weight = VAR_WEIGHT)
+            loss = instrument_jepa_loss(prediction, target, target_mask = anchor_mask, var_weight = VAR_WEIGHT)
             val_total_loss = val_total_loss + loss.item()
 
             z = model.encode(anchor_flux, anchor_mask)
