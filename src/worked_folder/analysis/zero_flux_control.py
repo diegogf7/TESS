@@ -16,13 +16,13 @@ from sklearn.model_selection import train_test_split
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DATA_PATH = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet"
 CHECKPOINT = os.environ.get("JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/instrument_jepa.pth")
-SPLIT_GAPS = os.environ.get("JEPA_SPLIT_GAPS", "0") == "1"
+
 
 
 BATCH_SIZE = 256
 GRID = 1024
 
-dataset = DualEvalDataset(DATA_PATH, grid_length=1024, split_gaps=SPLIT_GAPS)
+dataset = DualEvalDataset(DATA_PATH, grid_length=1024)
 
 
 loader = DataLoader(dataset, BATCH_SIZE, shuffle = False, num_workers = 2)
