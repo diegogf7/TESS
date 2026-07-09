@@ -1,13 +1,14 @@
 """Gap-blind retrain of the cross-star instrument JEPA.
 
-SAME model, SAME masked loss as the gapmask run -- no architecture changes.
-The only difference is the inputs: both curves are infilled (gaps replaced
-with values resampled from their own observed points) and the encoders get
-no mask, so gap placement is invisible to them. The ORIGINAL observed mask
-still weights the loss, so fabricated regions earn nothing. Sector signal
-can now only be learned from real flux structure.
+SAME model as always -- no architecture changes. Two differences from the
+gapmask run: (1) inputs are infilled (gaps replaced with values resampled
+from their own observed points) and the encoders get no mask, so gap
+placement is invisible; the ORIGINAL observed mask still weights the loss.
+(2) the variance penalty sits on the encoder's RAW context tokens (see
+gapblind_fix.py) -- the first gap-blind run collapsed to raw latent std
+~0.006 because nothing held the raw spread open once the masks were hidden.
 
-    python -m src.loss_function.train_instrument_gapblind
+    JEPA_VARW=0.5 python -m src.loss_function.train_instrument_gapblind
 """
 
 import os
@@ -16,11 +17,11 @@ import torch
 
 from src.data.data import DisentanglementDataset, DataLoader
 from src.loss_function.gap_infill import infill_gaps
-from src.worked_folder.instrument.instrument_jepa import build_instrument_jepa, instrument_jepa_loss
+from src.loss_function.gapblind_fix import build_gapblind_jepa, gapblind_loss
 
 BATCH_SIZE = 256
-EPOCHS = 100
-VAR_WEIGHT = 0.1
+EPOCHS = int(os.environ.get("JEPA_EPOCHS", "100"))
+VAR_WEIGHT = float(os.environ.get("JEPA_VARW", "0.5"))
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 DATA_PATH = os.environ.get("JEPA_DATA", "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_train_30min.parquet")
@@ -33,7 +34,8 @@ dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_worker
 val_dataset = DisentanglementDataset(VAL_PATH, grid_length=1024)
 val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
 
-model = build_instrument_jepa().to(DEVICE)
+print(f"config: EPOCHS={EPOCHS} VAR_WEIGHT={VAR_WEIGHT} -> {CHECKPOINT}")
+model = build_gapblind_jepa().to(DEVICE)
 
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
@@ -54,8 +56,8 @@ for epoch in range(EPOCHS):
         target_flux, _ = infill_gaps(anchor_flux, anchor_mask)
 
         optimizer.zero_grad()
-        prediction, target = model(context_flux, None, target_flux, None)
-        loss = instrument_jepa_loss(prediction, target, target_mask=anchor_mask, var_weight=VAR_WEIGHT)
+        prediction, target, context_tokens = model(context_flux, None, target_flux, None)
+        loss = gapblind_loss(prediction, target, context_tokens, target_mask=anchor_mask, var_weight=VAR_WEIGHT)
         loss.backward()
         optimizer.step()
         model.update_target()  # EMA step
@@ -81,8 +83,8 @@ for epoch in range(EPOCHS):
             context_flux, _ = infill_gaps(same_sector_flux, same_sector_mask)
             target_flux, _ = infill_gaps(anchor_flux, anchor_mask)
 
-            prediction, target = model(context_flux, None, target_flux, None)
-            val_total_loss = val_total_loss + instrument_jepa_loss(prediction, target, target_mask=anchor_mask, var_weight=VAR_WEIGHT).item()
+            prediction, target, context_tokens = model(context_flux, None, target_flux, None)
+            val_total_loss = val_total_loss + gapblind_loss(prediction, target, context_tokens, target_mask=anchor_mask, var_weight=VAR_WEIGHT).item()
 
             z = model.encode(target_flux, None)
             latent_chunks.append(z.reshape(z.shape[0], -1).cpu())
