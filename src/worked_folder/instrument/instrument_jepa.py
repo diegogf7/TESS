@@ -63,17 +63,31 @@ class InstrumentJEPA(nn.Module):
         for online_p, target_p in zip(self.context_encoder.parameters(), self.target_encoder.parameters()):
             target_p.data = m * target_p.data + (1.0 - m) * online_p.data
 
-def instrument_jepa_loss(prediction, target, var_weight = 0.0):
+def instrument_jepa_loss(prediction, target, target_mask = None, var_weight = 0.0):
 
-    loss = Functional.smooth_l1_loss(prediction, target)
+    per_token = Functional.smooth_l1_loss(prediction, target, target_mask = None, var_weight = 0.0)
+
+    if target_mask is None:
+
+        loss = per_token.mean()
+    
+    else:
+        B, N = per_token.shape
+        observed = target_mask.reshape(B, N, -1).mean(dim = 2)
+
+        loss = (per_token * observed).sum() / observed.sum().clamp(min = 1e-6)
 
     if var_weight > 0.0:
         flat = prediction.reshape(-1, prediction.shape[-1])
 
-        std = flat.std(dim = 0)
-        loss = loss + var_weight * torch.relu(1.0 - std).mean()
+        standard_deviation = flat.std(dim = 0)
+
+        loss = loss = var_weight * torch.relu(1.0 - standard_deviation).mean()
+
 
     return loss
+
+
 
 def build_instrument_jepa():
 
