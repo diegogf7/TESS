@@ -39,7 +39,6 @@ model = build_gapblind_jepa().to(DEVICE)
 
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
-best_val = float("inf")
 
 for epoch in range(EPOCHS):
     model.train()
@@ -93,7 +92,9 @@ for epoch in range(EPOCHS):
     latent_std = torch.cat(latent_chunks).std(0).mean().item()
     print(f"Epoch {epoch + 1} / {EPOCHS}, average val loss: {average_val:.5f}, latent std (collapse checking): {latent_std: .5f}")
 
-    if average_val < best_val:
-        best_val = average_val
-        torch.save(model.state_dict(), CHECKPOINT)
-        print(f"saved new best checkpoint (val {average_val:.6f}) --> {CHECKPOINT}")
+    # Always save the LATEST model (I-JEPA/BYOL convention). Best-val is
+    # meaningless here: as the latent spread opens, the LayerNormed targets
+    # get richer and genuinely harder to predict, so val loss RISES while the
+    # representation improves. Best-val froze the w=0.05 arm at epoch 3
+    # (std 0.26, probe 0.288) and threw away the mature model.
+    torch.save(model.state_dict(), CHECKPOINT)
