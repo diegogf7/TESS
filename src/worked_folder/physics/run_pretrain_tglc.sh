@@ -21,7 +21,7 @@ export JEPA_MASK_RATIO=0.5
 export JEPA_PREDICTOR=transformer
 
 # new checkpoint, new data -- nothing existing gets overwritten
-export JEPA_CKPT=/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa_tglc200k.pth
+export JEPA_CKPT=/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa_tglc200k_v3.pth
 export JEPA_DATA=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_pretrain_train.parquet
 export JEPA_VAL=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_pretrain_val.parquet
 

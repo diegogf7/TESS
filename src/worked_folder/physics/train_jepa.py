@@ -15,7 +15,7 @@ from src.data.data import LightCurveDataset, DataLoader
 from src.worked_folder.physics.latent_jepa import build_latent_jepa, jepa_latent_loss
 
 BATCH_SIZE = 256
-EPOCHS = 100
+EPOCHS = 30
 VAR_WEIGHT = 0.05  # gentle anti-collapse safety net
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
