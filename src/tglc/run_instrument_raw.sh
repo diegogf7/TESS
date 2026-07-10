@@ -11,9 +11,6 @@
 # Gapmask instrument JEPA on RAW TGLC flux (systematics included, no
 # quality filters). The question: can it learn sector from flux alone?
 
-cd /orcd/scratch/orcd/006/diegogon/TESS
-conda activate lightcurve
-
 echo "=== node: $(hostname) ==="
 nvidia-smi
 
@@ -25,6 +22,7 @@ echo "=== TRAIN (gapmask instrument JEPA on RAW flux) ==="
 python -m src.worked_folder.instrument.train_instrument_jepa
 
 echo "=== GAP-BLIND PROBE (raw val set) ==="
-python -m src.loss_function.gapblind_probe_raw
+JEPA_DATA=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_val.parquet \
+    python -m src.loss_function.gapblind_probe_raw
 
 echo "=== DONE ==="

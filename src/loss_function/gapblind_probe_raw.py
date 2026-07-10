@@ -24,7 +24,7 @@ print(f"data: {DATA_PATH}")
 print(f"checkpoint: {CHECKPOINT}")
 
 dataset = SectorDataset(DATA_PATH, grid_length = 1024)
-loader = DataLoader(dataset, shuffle = False, num_workers = 2)
+loader = DataLoader(dataset, BATCH_SIZE, shuffle = False, num_workers = 2)
 
 model = build_instrument_jepa().to(DEVICE)
 model.load_state_dict(torch.load(CHECKPOINT, map_location = DEVICE))
@@ -62,6 +62,7 @@ latents = {name: np.concatenate(chunks) for name, chunks in latents.items()}
 unique, counts = np.unique(sectors, return_counts = True)
 
 keep = np.isin(sectors, unique[counts >= 5])
+sectors = sectors[keep]
 latents = {name: X[keep] for name, X in latents.items()}
 
 index = np.arange(len(sectors))
