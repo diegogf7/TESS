@@ -42,4 +42,47 @@ with torch.no_grad():
         z_full = model.encode(flux, mask)
         z_zero = model.encode(torch.zeros_like(flux), mask)
 
-        
+
+        filled, _ = infill_gaps(flux, mask)
+        z_blind = model.encode(filled, None)
+
+        latents["full"].append(z_full.reshape(z_full.shape[0], -1).cpu().numpy())
+        latents["zero_flux"].append(z_zero.reshape(z_zero.shape[0], -1).cpu().numpy())
+
+        latents["gap_blind"].append(z_blind.reshape(z_blind.shape[0], -1).cpu().numpy())
+
+        all_sectors.append(sector.numpy())
+
+        if i % 10 == 0:
+            print(f"encoding batch {i} / {len(loader)}")
+
+sectors = np.concatenate(all_sectors)
+latents = {name: np.concatenate(chunks) for name, chunks in latents.items()}
+
+unique, counts = np.unique(sectors, return_counts = True)
+
+keep = np.isin(sectors, unique[counts >= 5])
+latents = {name: X[keep] for name, X in latents.items()}
+
+index = np.arange(len(sectors))
+index_train, index_test = train_test_split(index, test_size = 0.2, stratify = sectors, random_state = 0)
+
+def probe_accuracy(X):
+
+    scaler = StandardScaler().fit(X[index_train])
+    probe = LogisticRegression(max_iter = 2000, class_weight = "balanced").fit(scaler.transform(X[index_train]), sectors[index_train])
+
+    return balanced_accuracy_score(sectors[index_test], probe.predict(scaler.transform(X[index_test])))
+
+chance = 1.0 /len(np.unique(sectors))
+
+accuracy = {name: probe_accuracy(X) for name, X in latents.items()}
+
+print(f"checkpoint: {CHECKPOINT}")
+print(f"{len(np.unique(sectors))} sectors, chance = {chance:.5f}")
+print(f"full      (flux + mask) -> SECTOR: {accuracy['full']:.5f}")
+print(f"zero-flux (mask only)   -> SECTOR: {accuracy['zero_flux']:.5f}   <- mask-borne")
+print(f"gap-blind (flux only)   -> SECTOR: {accuracy['gap_blind']:.5f}   <- flux-borne, the number that matters")
+
+
+
