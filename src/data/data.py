@@ -100,15 +100,19 @@ class ClassificationDataset(Dataset):
 
     
 class DisentanglementDataset(Dataset):
-    def __init__(self, parquet, grid_length = 1024,multi_sector_only = False, split_gaps = False):
+    def __init__(self, parquet, grid_length = 1024, multi_sector_only = False, split_gaps = False, group_cols = ("sector",)):
         self.df = pd.read_parquet(parquet)
         self.grid_length = grid_length
         self.split_gaps = split_gaps
-
+        self.group_of_row = list(zip(*[self.df[c].to_numpy() for c in group_cols]))
         #I don't know how to do this properly
         self.tic_to_indices = {tic: list(indices) for tic, indices in self.df.groupby('TIC').groups.items()}
+        self.group_to_indices = {}
 
-        self.sector_to_indices = {sector: list(indices) for sector, indices in self.df.groupby('sector').groups.items()}
+        for i, key in enumerate(self.group_of_row):
+
+            self.group_to_indices.setdefault(key, []).append(i)
+        
 
         self.tics = self.df['TIC'].to_numpy()
         self.sectors = self.df['sector'].to_numpy()
@@ -157,9 +161,8 @@ class DisentanglementDataset(Dataset):
         else:
             new_sector = random.choice(potential_sectors)
 
-
-        sector = self.sector_to_indices[anchor_sector]
-        potential_TICs = [i for i in sector if self.tics[i] != anchor_tic]
+        group = self.group_to_indices[self.group_of_row[idx]]
+        potential_TICs = [i for i in group if self.tics[i] != anchor_tic]
 
         if len(potential_TICs) == 0:
             new_TIC = idx
