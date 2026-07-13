@@ -16,7 +16,7 @@ nvidia-smi
 
 export JEPA_DATA=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_train_40k.parquet
 export JEPA_VAL=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_val.parquet
-export JEPA_CKPT=/orcd/scratch/orcd/006/diegogon/checkpoints/instrument_jepa_raw.pth
+export JEPA_CKPT=/orcd/scratch/orcd/006/diegogon/checkpoints/instrument_jepa_raw_edges.pth
 
 echo "=== TRAIN (gapmask instrument JEPA on RAW flux) ==="
 python -m src.worked_folder.instrument.train_instrument_jepa
