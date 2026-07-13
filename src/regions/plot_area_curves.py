@@ -24,25 +24,21 @@ sel = df[(df.sector == SECTOR) & (df.area == AREA)]
 
 print(f"Sector {SECTOR}, camera {CAMERA}, ccd {CCD}, ring {RING} (area {AREA}): {len(sel)} curves")
 
-rows = sel.sample(n = min(N_CURVES, len(sel)), random_state = SEED)
+rows = sel.sample(n = 1, random_state = SEED).iloc[0]
 
-figure, axis = plt.subplots(len(rows), 1, figsize = (11, 2.5 * len(rows)), sharex = True)
-axis = np.atleast_1d(axis)
 
-for ax, (_, r) in zip(axis, rows.iterrows()):
+time = np.asarray(rows["time"], dtype = float)
+flux = np.asarray(rows["flux"], dtype = float)
 
-    time = np.asarray(r["time"], dtype = float)
-    flux = np.asarray(r["flux"], dtype = float)
+relative = flux / np.median(flux) - 1.0
 
-    relative = flux / np.median(flux) - 1.0
+figure, axis = plt.subplots(figsize = (11, 4))
 
-    ax.plot(time, relative, lw = 0.5, color = "black")
+axis.plot(time, relative, ".", ms = 2)
+axis.set_ylabel("Relative flux")
+axis.set_xlabel("Time [BTJD]")
+figure.suptitle(f"Raw TGLC curve: sector {SECTOR}, area {AREA}, camera distance {r['cam_dist']:.1f} degrees", fontsize = 10)
 
-    ax.set_ylabel("relative flux")
-    ax.set_title(f"GAIA {r['GAIADR3']} camera distance: {r['cam_dist']:.1f} degrees", fontsize = 10)
-
-axis[-1].set_xlabel("Time (BTJD)")
-figure.suptitle(f"Raw TGLC: sector {SECTOR}, camera {CAMERA}, CCD {CCD}, REGION {RING}, area {AREA}", y = 1.0)
 figure.tight_layout()
 figure.savefig(OUT, dpi = 150)
 
