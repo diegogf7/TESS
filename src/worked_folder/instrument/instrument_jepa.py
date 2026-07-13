@@ -75,6 +75,8 @@ def instrument_jepa_loss(prediction, target, target_mask = None, var_weight = 0.
         B, N = per_token.shape
         observed = target_mask.reshape(B, N, -1).mean(dim = 2)
 
+        observed = (observed >= 0.99).float()
+
         loss = (per_token * observed).sum() / observed.sum().clamp(min = 1e-6)
 
     if var_weight > 0.0:
