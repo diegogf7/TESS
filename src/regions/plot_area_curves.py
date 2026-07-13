@@ -37,7 +37,7 @@ figure, axis = plt.subplots(figsize = (11, 4))
 axis.plot(time, relative, ".", ms = 2)
 axis.set_ylabel("Relative flux")
 axis.set_xlabel("Time [BTJD]")
-figure.suptitle(f"Raw TGLC curve: sector {SECTOR}, area {AREA}, camera distance {r['cam_dist']:.1f} degrees", fontsize = 10)
+figure.suptitle(f"Raw TGLC curve: sector {SECTOR}, area {AREA}, camera distance {rows['cam_dist']:.1f} degrees", fontsize = 10)
 
 figure.tight_layout()
 figure.savefig(OUT, dpi = 150)
