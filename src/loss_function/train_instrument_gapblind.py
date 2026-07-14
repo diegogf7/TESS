@@ -28,7 +28,11 @@ DATA_PATH = os.environ.get("JEPA_DATA", "/orcd/scratch/orcd/006/diegogon/phyts/T
 VAL_PATH = os.environ.get("JEPA_VAL", "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val_30min.parquet")
 CHECKPOINT = os.environ.get("JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/instrument_jepa_gapblind.pth")
 
-dataset = DisentanglementDataset(DATA_PATH, grid_length=1024)
+GROUP_COLS = tuple(os.environ.get("JEPA_GROUP", "sector").split(","))
+
+
+dataset = DisentanglementDataset(DATA_PATH, grid_length=1024, group_cols=GROUP_COLS)
+
 dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
 
 val_dataset = DisentanglementDataset(VAL_PATH, grid_length=1024)
