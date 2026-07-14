@@ -12,6 +12,8 @@ gapblind_fix.py) -- the first gap-blind run collapsed to raw latent std
 """
 
 import os
+import random
+import numpy as np
 
 import torch
 
@@ -28,17 +30,31 @@ DATA_PATH = os.environ.get("JEPA_DATA", "/orcd/scratch/orcd/006/diegogon/phyts/T
 VAL_PATH = os.environ.get("JEPA_VAL", "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split/tess_classification_val_30min.parquet")
 CHECKPOINT = os.environ.get("JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/instrument_jepa_gapblind.pth")
 
+SEED = int(os.environ.get("JEPA_SEED", "0"))
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+
+def seed_worker(worker_id):
+
+    worker_seed = torch.initial_seed() % 2**32
+    random.seed(worker_seed)
+
+    np.random.seed(worker_seed)
+
 GROUP_COLS = tuple(os.environ.get("JEPA_GROUP", "sector").split(","))
 
 
 dataset = DisentanglementDataset(DATA_PATH, grid_length=1024, group_cols=GROUP_COLS)
 
-dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4)
+dataloader = DataLoader(dataset, batch_size = BATCH_SIZE, shuffle = True, num_workers = 4, worker_init_fn = seed_worker, generator = torch.Generator().manual_seed(SEED))
 
-val_dataset = DisentanglementDataset(VAL_PATH, grid_length=1024)
-val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4)
+val_dataset = DisentanglementDataset(VAL_PATH, grid_length=1024, group_cols=GROUP_COLS)
 
-print(f"config: EPOCHS={EPOCHS} VAR_WEIGHT={VAR_WEIGHT} -> {CHECKPOINT}")
+val_dataloader = DataLoader(val_dataset, batch_size = BATCH_SIZE, shuffle = False, num_workers = 4, worker_init_fn = seed_worker, generator = torch.Generator().manual_seed(SEED))
+
+
+print(f"config: EPOCHS={EPOCHS} VAR_WEIGHT={VAR_WEIGHT} GROUP={GROUP_COLS} SEED={SEED} -> {CHECKPOINT}")
 model = build_gapblind_jepa().to(DEVICE)
 
 optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3)
@@ -102,3 +118,6 @@ for epoch in range(EPOCHS):
     # representation improves. Best-val froze the w=0.05 arm at epoch 3
     # (std 0.26, probe 0.288) and threw away the mature model.
     torch.save(model.state_dict(), CHECKPOINT)
+
+    if (epoch + 1) % 10 == 0:
+        torch.save(model.state_dict(), CHECKPOINT.replace(".pth", f"_ep{epoch + 1:03d}.pth"))
