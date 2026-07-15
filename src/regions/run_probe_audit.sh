@@ -5,7 +5,7 @@
 #SBATCH -N 1
 #SBATCH -c 8
 #SBATCH --mem=64G
-#SBATCH -t 08:00:00
+#SBATCH -t 06:00:00
 #SBATCH -o probe_audit_%j.out
 
 # All code by Claude.
@@ -18,7 +18,7 @@ cd /orcd/scratch/orcd/006/diegogon/TESS
 echo "=== node: $(hostname) ==="
 nvidia-smi
 
-export JEPA_DATA=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_probe20k_area.parquet
+export JEPA_DATA=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_probe_s14_100.parquet
 
 $PY -m src.regions.eval_chip_probes_audit
 
