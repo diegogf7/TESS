@@ -117,10 +117,10 @@ def within_sector_probe(y, label):
         sector_means.append(np.mean(scores))
 
     if not sector_means:
-        print(f"Within sector {label}: all {skipped} sectors skipped")
+        print(f"Within sector {label}: all {skipped_values} sectors skipped")
         return
     
-    print(f"Within sector {label}: {np.mean(sector_means):.5f} plus/minus {np.std(sector_means):.5f} over {len(sector_means)} sectors, {skipped} skipped")
+    print(f"Within sector {label}: {np.mean(sector_means):.5f} plus/minus {np.std(sector_means):.5f} over {len(sector_means)} sectors, {skipped_values} skipped")
 
 def leave_sectors_out_probe(y, label):
 
