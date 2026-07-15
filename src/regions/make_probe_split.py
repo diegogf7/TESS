@@ -15,5 +15,5 @@ probe = (pool.groupby(["sector", "camera", "ccd"], group_keys=False).apply(lambd
 
 counts = probe.groupby(["sector", "camera", "ccd"]).size()
 
-print(f"{len(probe)} curves, {probe["GAIADR3"].nunique()} stars, min/max per chip class: {counts.min()} / {counts.max()}")
+print(f"{len(probe)} curves, {probe['GAIADR3'].nunique()} stars, min/max per chip class: {counts.min()} / {counts.max()}")
 probe.to_parquet(OUT)
