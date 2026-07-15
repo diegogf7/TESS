@@ -105,7 +105,7 @@ def within_sector_probe(y, label):
         classes, counts = np.unique(y_sector, return_counts = True)
         if (len(classes) < 2) or (counts.min() < MIN_PER_CLASS):
 
-            skipped = skipped + 1
+            skipped_values = skipped_values + 1
             continue
 
         scores = []
@@ -132,10 +132,12 @@ def leave_sectors_out_probe(y, label):
 
 
 print(f"Checkpoint: {CHECKPOINT}")
-print(f"Data: {DATA_PATH} ({len(dataset)} curves, {len(np.unique(sectors))}) sectors")
+print(f"Data: {DATA_PATH} ({len(dataset)} curves, {len(np.unique(sectors))} sectors)")
 
 for label, y in [("CAMERA", camera), ("CCD", ccd), ("CAM-CCD", cam_ccd)]:
 
     print(f" {label}: chance ~ {1.0 / len(np.unique(y)):.5f}")
     probe_global(y, label)
+    within_sector_probe(y, label)
     
+    leave_sectors_out_probe(y, label)
