@@ -86,43 +86,56 @@ def probe_global(y, label):
     
     scores = []
     for r in range(N_REPEATS):
-        
+        train, test = train_test_split(np.arange(len(y)), test_size = 0.2, stratify = y, random_state = r)
+        scores.append(fit_probe(X[train], y[train], X[test], y[test]))
+
+    print(f"Global {label}: {np.mean(scores):.5f} plus/minus {np.std(scores):.4f} ({N_REPEATS} splits)")
+
 
 def within_sector_probe(y, label):
 
-    scores = []
-    skipped = 0
+    sector_means = []
+    skipped_values = 0
 
     for sector in np.unique(sectors):
         in_sector = sectors == sector
-
         y_sector = y[in_sector]
+        X_sector = X[in_sector]
 
         classes, counts = np.unique(y_sector, return_counts = True)
+        if (len(classes) < 2) or (counts.min() < MIN_PER_CLASS):
 
-        if ((len(classes) < 2) or (counts.min() < MIN_PER_CLASS)):
             skipped = skipped + 1
             continue
 
-        X_sector = X[in_sector]
+        scores = []
+        for r in range(5):
 
-        index = np.arange(len(y_sector))
-        index_train, index_test = train_test_split(index, test_size = 0.2, stratify = y_sector, random_state = 0)
-        accuracy = fit_probe(X_sector[index_train], y_sector[index_train], X_sector[index_test], y_sector[index_test])
+            train, test = train_test_split(np.arange(len(y_sector)), test_size = 0.2, stratify = y_sector, random_state = r)
+            scores.append(fit_probe(X_sector[train], y_sector[train], X_sector[test], y_sector[test]))
 
-        scores.append(accuracy)
+        sector_means.append(np.mean(scores))
 
-        print(f"sector {sector}: n = {in_sector.sum()}, {len(classes)} classes, balanced accuracy {accuracy:.5f}")
-    
-    if not scores:
-        print(f"Sector {label}: no sector had enough samples: all {skipped} skipped")
+    if not sector_means:
+        print(f"Within sector {label}: all {skipped} sectors skipped")
         return
     
-    print(f"Sector {label}: mean {np.mean(scores):.5f} over {len(scores)} sectors, {skipped} skipped ")
+    print(f"Within sector {label}: {np.mean(sector_means):.5f} plus/minus {np.std(sector_means):.5f} over {len(sector_means)} sectors, {skipped} skipped")
 
-print(f"checkpoint: {CHECKPOINT}")
-print(f"data: {DATA_PATH} ({len(dataset)} curves, {len(np.unique(sectors))} sectors)")
+def leave_sectors_out_probe(y, label):
+
+    scores = []
+    for train, test in GroupKFold(n_splits = 5).split(X, y, groups = sectors):
+        scores.append(fit_probe(X[train], y[train], X[test], y[test]))
+
+    print(f"Leave sector out {label}: {np.mean(scores):.5f} plus/minus {np.std(scores):.5f} (5 folds)")
+
+
+print(f"Checkpoint: {CHECKPOINT}")
+print(f"Data: {DATA_PATH} ({len(dataset)} curves, {len(np.unique(sectors))}) sectors")
 
 for label, y in [("CAMERA", camera), ("CCD", ccd), ("CAM-CCD", cam_ccd)]:
-    print(f"{label}: chance ~ {1.0 / len(np.unique(y)):.5f}")
-    within_sector_probe(y, label)
+
+    print(f" {label}: chance ~ {1.0 / len(np.unique(y)):.5f}")
+    probe_global(y, label)
+    
