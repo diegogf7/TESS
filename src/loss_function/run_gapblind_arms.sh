@@ -33,12 +33,14 @@ mkdir -p /orcd/scratch/orcd/006/diegogon/checkpoints
 echo "=== TRAIN (gap-blind, ${TAG} pairing, seed ${JEPA_SEED}) ==="
 $PY -m src.loss_function.train_instrument_gapblind
 
+# Final evaluation on the star-disjoint probe set (NOT the old 4,077-row
+# random val split, which shares stars with training).
 echo "=== CHIP PROBES (within-sector / leave-sector-out) ==="
-JEPA_DATA=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_val_area.parquet \
+JEPA_DATA=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_probe20k_area.parquet \
     $PY -m src.regions.eval_chip_probes
 
 echo "=== SECTOR PROBE (health check) ==="
-JEPA_DATA=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_val_area.parquet \
+JEPA_DATA=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_probe20k_area.parquet \
     $PY -m src.loss_function.gapblind_probe_raw
 
 echo "=== DONE ==="
