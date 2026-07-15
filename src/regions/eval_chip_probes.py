@@ -14,13 +14,23 @@ from sklearn.metrics import balanced_accuracy_score
 
 from sklearn.model_selection import train_test_split
 
+from sklearn.pipeline import make_pipeline
+from sklearn.decomposition import PCA
+from sklearn.model_selection import train_test_split, GroupKFold
+
+torch.manual_seed(0)
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DATA_PATH = os.environ.get("JEPA_DATA", "/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_val_area.parquet")
+DATA_PATH = os.environ.get("JEPA_DATA", "/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_probe20k_area.parquet")
 
 CHECKPOINT = os.environ.get("JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/instrument_gapblind_chip_s0.pth")
 
 BATCH_SIZE = 256
 MIN_PER_CLASS = 10
+
+N_INFILLS = 5
+N_REPEATS = 10
+PCA_DIM = 32
 
 dataset = SectorDataset(DATA_PATH, grid_length = 1024)
 loader = DataLoader(dataset, BATCH_SIZE, shuffle = False, num_workers = 2)
@@ -42,26 +52,41 @@ with torch.no_grad():
         flux = flux.to(DEVICE)
 
         mask = mask.to(DEVICE)
-        filled, _ = infill_gaps(flux, mask)
+        z_sum = 0.0
 
-        z = model.encode(filled, None)
+        for _ in range(N_INFILLS):
+
+            filled, _ = infill_gaps(flux, mask)
+            z_sum = z_sum + model.encode(filled, None)
+        
+        z = z_sum / N_INFILLS
+
         pieces.append(z.reshape(z.shape[0], -1).cpu().numpy())
 
-        if i % 30 == 0:
-            print(f"batch {i} / {len(loader)}")
+        if i % 20 == 0:
+            print(f"Batch {i} / {len(loader)}")
+
 
 X = np.concatenate(pieces)
 
 def fit_probe(X_train, y_train, X_test, y_test):
 
-    scaler = StandardScaler().fit(X_train)
-    probe = LogisticRegression(max_iter = 2000, class_weight = "balanced")
+    probe = make_pipeline(
+        StandardScaler(),
+        PCA(n_components = PCA_DIM, random_state = 0),
+        LogisticRegression(max_iter = 2000, class_weight = "balanced"),
 
-    probe.fit(scaler.transform(X_train), y_train)
-
-    final = balanced_accuracy_score(y_test, probe.predict(scaler.transform(X_test)))
-
+    )
+    probe.fit(X_train, y_train)
+    final = balanced_accuracy_score(y_test, probe.predict(X_test))
     return final
+
+
+def probe_global(y, label):
+    
+    scores = []
+    for r in range(N_REPEATS):
+        
 
 def within_sector_probe(y, label):
 
