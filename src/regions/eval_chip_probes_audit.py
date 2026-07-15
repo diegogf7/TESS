@@ -203,7 +203,10 @@ for enc in ENCODERS:
         for label, y, min_pc in LABELS:
             try:
                 ws_mean, (ws_lo, ws_hi), skipped = within_sector(X, y, pca_dim, min_pc)
-                lso_mean, (lso_lo, lso_hi) = leave_sector_out(X, y, pca_dim)
+                if len(np.unique(sectors)) >= 2:
+                    lso_mean, (lso_lo, lso_hi) = leave_sector_out(X, y, pca_dim)
+                else:  # single-sector data: LSO undefined
+                    lso_mean, lso_lo, lso_hi = float("nan"), float("nan"), float("nan")
             except ConvergenceWarning as w:
                 print(f"FAILED {enc} pca={pca_str} {label}: ConvergenceWarning ({w})")
                 results[(enc, label, pca_str, "within")] = np.nan
