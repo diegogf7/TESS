@@ -5,14 +5,21 @@ Pure synthetic data -- no cluster files, no torch, no matplotlib.
 Run: python -m src.tests.test_chip_common_signal   (or pytest)
 """
 
+import os
+import tempfile
+
 import numpy as np
 
 from src.instrument_v2.diagnose_chip_common_signal import (
+    apply_quality_mask,
     build_exact_cadence,
     chip_index,
     chip_name,
     fit_chip_bases,
+    load_or_create_split,
     make_split,
+    paired_bootstrap,
+    permute_labels,
     predict_chips,
     recon_error,
     shuffle_within_curves,
@@ -148,6 +155,68 @@ def test_end_to_end_recovers_planted_common_mode():
     assert n_unpred == 0
     accuracy = float(np.mean(pred == chips[~is_train]))
     assert accuracy > 0.9, f"planted common mode not recovered (acc {accuracy})"
+
+
+def test_k0_uses_chip_mean_only():
+    """K=0 must classify by the chip's masked mean curve, no components."""
+    d = 32
+    mean_a, mean_b = np.full(d, 1.0), np.full(d, -1.0)
+    comps = np.random.default_rng(4).normal(size=(4, d))
+    m = np.ones(d, dtype=np.float32)
+    x = np.full(d, 0.9)                               # much closer to mean_a
+    e_a = recon_error(x, m, mean_a, comps, k=0)
+    e_b = recon_error(x, m, mean_b, comps, k=0)
+    assert abs(e_a - np.mean((x - mean_a) ** 2)) < 1e-12, "K=0 error is not masked MSE to mean"
+    assert e_a < e_b
+    # K=0 must ignore the components entirely
+    e_a2 = recon_error(x, m, mean_a, comps * 100, k=0)
+    assert e_a == e_a2, "K=0 depends on PCA components"
+
+
+def test_quality_mask_keeps_only_clean_cadences():
+    time = np.arange(6, dtype=float)
+    flux = np.arange(6, dtype=float) * 10
+    cad = np.arange(100, 106)
+    tess = np.array([0, 0, 1, 0, 0, 0])
+    tglc = np.array([0, 0, 0, 0, 2, 0])
+    t, f, c = apply_quality_mask(time, flux, cad, [tess, tglc])
+    assert list(c) == [100, 101, 103, 105], "wrong cadences kept"
+    assert list(f) == [0.0, 10.0, 30.0, 50.0]
+    assert len(t) == 4
+
+
+def test_permuted_labels_preserve_multiset():
+    y = np.repeat(np.arange(4), 10)
+    yp = permute_labels(y, seed=0)
+    assert not np.array_equal(y, yp), "permutation did nothing"
+    assert np.array_equal(np.sort(y), np.sort(yp)), "permutation changed label counts"
+    assert np.array_equal(yp, permute_labels(y, seed=0)), "not deterministic"
+
+
+def test_paired_bootstrap_direction():
+    rng = np.random.default_rng(5)
+    y = rng.integers(0, 4, size=400)
+    good = y.copy()
+    wrong = rng.integers(0, 4, size=400)
+    good[rng.random(400) < 0.2] = rng.integers(0, 4, size=int((rng.random(400) < 0.2).sum()) or 1)[0]
+    d, lo, hi, p = paired_bootstrap(y, good, wrong, n_boot=200, seed=0)
+    assert d > 0 and p < 0.05, f"clearly-better predictor not detected (d={d}, p={p})"
+    d0, _, _, p0 = paired_bootstrap(y, wrong, wrong, n_boot=200, seed=0)
+    assert d0 == 0.0, "identical predictors must have zero diff"
+
+
+def test_split_saved_and_reloaded_identically():
+    tics = [f"TIC{i}" for i in range(50)]
+    with tempfile.TemporaryDirectory() as tmp:
+        train1, test1 = load_or_create_split(tics, tmp, seed=42)
+        assert os.path.exists(os.path.join(tmp, "split_train_tics.txt"))
+        train2, test2 = load_or_create_split(tics, tmp, seed=999)  # seed ignored on reload
+        assert train1 == train2 and test1 == test2, "reloaded split differs"
+        try:
+            load_or_create_split(tics + ["TIC_NEW"], tmp, seed=42)
+            assert False, "mismatched TIC set accepted"
+        except RuntimeError:
+            pass
 
 
 ALL_TESTS = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
