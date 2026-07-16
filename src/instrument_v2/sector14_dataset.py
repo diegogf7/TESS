@@ -171,7 +171,8 @@ class Sector14ChipPairDataset(Dataset):
     """
 
     def __init__(self, df, allowed_tics, arm, t_range, grid_length=GRID_1024,
-                 pairs_per_epoch=None, sector=14):
+                 pairs_per_epoch=None, sector=14, return_chip=False):
+        self.return_chip = return_chip
         df = df[df["sector"] == sector]
         df = df[df["TIC"].astype(str).isin(set(allowed_tics))].reset_index(drop=True)
         if len(df) == 0:
@@ -205,6 +206,9 @@ class Sector14ChipPairDataset(Dataset):
         return int(a), int(b), int(chip)
 
     def __getitem__(self, idx):
-        a, b, _ = self._sample_pair()
-        return (torch.tensor(self.X[a]), torch.tensor(self.M[a]),
-                torch.tensor(self.X[b]), torch.tensor(self.M[b]))
+        a, b, chip = self._sample_pair()
+        items = (torch.tensor(self.X[a]), torch.tensor(self.M[a]),
+                 torch.tensor(self.X[b]), torch.tensor(self.M[b]))
+        if self.return_chip:
+            return items + (torch.tensor(chip, dtype=torch.int64),)
+        return items
