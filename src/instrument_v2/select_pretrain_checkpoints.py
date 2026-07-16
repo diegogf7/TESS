@@ -97,6 +97,13 @@ def best_probe(Ztr, ytr, Zval, yval):
     return best
 
 
+def fast_score(Ztr, ytr, Zval, yval):
+    """Single cheap probe (C=1, PCA-64) used only to RANK epochs; the full
+    hyperparameter grid runs once on the winning epoch. Validation-only."""
+    clf = fit_probe(Ztr, ytr, 1.0, 64)
+    return balanced_accuracy_score(yval, clf.predict(Zval))
+
+
 def arm_checkpoints(arm, seed):
     """{epoch: path} of every saved epoch for an arm/seed (None for random)."""
     if arm == "random":
@@ -148,24 +155,28 @@ def main():
     for arm in arms:
         selection[arm] = {}
         for seed in SEEDS:
-            best = None
+            # pass 1: rank epochs with the fast probe, keep the winner's latents
+            winner = None                        # (fast_bacc, epoch, path, Z)
             for epoch, path in sorted(arm_checkpoints(arm, seed).items()):
                 model = build_model(arm, seed, path)
                 Z = encode(model, X, M)
-                bacc, C, pca_dim = best_probe(Z[is_train], ytr, Z[~is_train], yval)
-                print(f"{arm:12s} s{seed} ep{epoch:3d}  val bacc16 {bacc:.4f} "
-                      f"(C={C}, pca={pca_dim or 0})", flush=True)
-                if best is None or bacc > best["val_bacc16"]:
-                    # camera/CCD probes for this candidate, same latents
-                    cam = balanced_accuracy_score(
-                        yval // 4, fit_probe(Z[is_train], ytr // 4, C, pca_dim).predict(Z[~is_train]))
-                    ccd = balanced_accuracy_score(
-                        yval % 4, fit_probe(Z[is_train], ytr % 4, C, pca_dim).predict(Z[~is_train]))
-                    best = {"checkpoint": path, "epoch": epoch, "probe_C": C,
-                            "probe_pca": pca_dim or 0, "val_bacc16": bacc,
-                            "val_bacc_camera": cam, "val_bacc_ccd": ccd}
-            selection[arm][str(seed)] = best
-            print(f"SELECTED {arm} s{seed}: ep{best['epoch']} val {best['val_bacc16']:.4f}")
+                fb = fast_score(Z[is_train], ytr, Z[~is_train], yval)
+                print(f"{arm:12s} s{seed} ep{epoch:3d}  fast val bacc16 {fb:.4f}", flush=True)
+                if winner is None or fb > winner[0]:
+                    winner = (fb, epoch, path, Z)
+            # pass 2: full probe grid on the winning epoch only
+            _, epoch, path, Z = winner
+            bacc, C, pca_dim = best_probe(Z[is_train], ytr, Z[~is_train], yval)
+            cam = balanced_accuracy_score(
+                yval // 4, fit_probe(Z[is_train], ytr // 4, C, pca_dim).predict(Z[~is_train]))
+            ccd = balanced_accuracy_score(
+                yval % 4, fit_probe(Z[is_train], ytr % 4, C, pca_dim).predict(Z[~is_train]))
+            selection[arm][str(seed)] = {
+                "checkpoint": path, "epoch": epoch, "probe_C": C,
+                "probe_pca": pca_dim or 0, "val_bacc16": bacc,
+                "val_bacc_camera": cam, "val_bacc_ccd": ccd}
+            print(f"SELECTED {arm} s{seed}: ep{epoch} val {bacc:.4f} "
+                  f"(C={C}, pca={pca_dim or 0})")
 
     # one global hybrid weight by mean val bacc16 across seeds
     weight_means = {w: float(np.mean([selection[f"hybrid_w{w}"][str(s)]["val_bacc16"]
