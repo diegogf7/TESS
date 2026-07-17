@@ -50,12 +50,30 @@ def map_finetune_task(i):
     return tasks[i]
 
 
+ONLINE_FT_ARMS = ("jepa", "supcon", "hybrid")
+
+
+def online_finetune_tasks():
+    """Encoder audit: 3 arms x 3 seeds x 3 backbone lrs = 27 tasks, camccd only."""
+    return [{"INIT_ARM": a, "SEED": s, "BACKBONE_LR": lr}
+            for a, s, lr in product(ONLINE_FT_ARMS, SEEDS, BACKBONE_LRS)]
+
+
+def map_online_finetune_task(i):
+    tasks = online_finetune_tasks()
+    if not 0 <= i < len(tasks):
+        raise IndexError(f"online finetune task id {i} out of range 0..{len(tasks) - 1}")
+    return tasks[i]
+
+
 if __name__ == "__main__":
     kind = sys.argv[1]
     if kind == "counts":
         print(f"PRETRAIN_TASKS={len(pretrain_tasks())}")
         print(f"FINETUNE_TASKS={len(finetune_tasks())}")
+        print(f"ONLINE_FINETUNE_TASKS={len(online_finetune_tasks())}")
     else:
-        task = (map_pretrain_task if kind == "pretrain" else map_finetune_task)(int(sys.argv[2]))
-        for key, value in task.items():
+        mapper = {"pretrain": map_pretrain_task, "finetune": map_finetune_task,
+                  "online_finetune": map_online_finetune_task}[kind]
+        for key, value in mapper(int(sys.argv[2])).items():
             print(f"{key}={value}")
