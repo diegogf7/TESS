@@ -58,6 +58,7 @@ BATCH = int(os.environ.get("BATCH", "64"))
 LR = float(os.environ.get("LR", "1e-3"))
 VARW = float(os.environ.get("VARW", "0.5"))
 MAD_WEIGHT = float(os.environ.get("MAD_WEIGHT", "0.25"))
+COV_WEIGHT = float(os.environ.get("COV_WEIGHT", "0.0"))
 WARMSTART = os.environ.get("WARMSTART", "1") == "1"
 PROBE_EVERY = int(os.environ.get("PROBE_EVERY", "2"))
 MAX_BATCHES = int(os.environ.get("MAX_BATCHES", "0"))
@@ -84,6 +85,7 @@ WARMSTART_SELECTION = os.environ.get(
 # promotion gates (screen selection refuses collapsed models)
 GATE_MIN_ERANK = float(os.environ.get("GATE_MIN_ERANK", "16"))
 GATE_MIN_SAME_COS = float(os.environ.get("GATE_MIN_SAME_COS", "0.90"))
+GATE_MIN_PROBE = float(os.environ.get("GATE_MIN_PROBE", "0.0"))  # v2: 0.44
 
 
 def target_cosine_stats(model, dataset, n_draws=N_COSINE_DRAWS):
@@ -115,7 +117,7 @@ def run_epoch(model, loader, optimizer=None):
     training = optimizer is not None
     model.train(training)
     totals = {"loss": 0.0, "median_loss": 0.0, "mad_loss": 0.0,
-              "valid_stars": 0.0}
+              "var_loss": 0.0, "cov_loss": 0.0, "valid_stars": 0.0}
     batches = 0
     context = torch.enable_grad() if training else torch.no_grad()
     with context:
@@ -128,7 +130,8 @@ def run_epoch(model, loader, optimizer=None):
             pred_median, target_median, pred_mad, target_mad, tokens = outputs
             loss, parts = commonmode_loss(
                 pred_median, target_median, pred_mad, target_mad, tokens,
-                valid, mad_weight=MAD_WEIGHT, var_weight=VARW)
+                valid, mad_weight=MAD_WEIGHT, var_weight=VARW,
+                cov_weight=COV_WEIGHT)
             if training:
                 optimizer.zero_grad()
                 loss.backward()
@@ -137,6 +140,8 @@ def run_epoch(model, loader, optimizer=None):
             totals["loss"] += float(loss.detach())
             totals["median_loss"] += parts["median_loss"]
             totals["mad_loss"] += parts["mad_loss"]
+            totals["var_loss"] += parts["var_loss"]
+            totals["cov_loss"] += parts["cov_loss"]
             totals["valid_stars"] += float(
                 (n_observed * valid).sum() / valid.sum().clamp(min=1))
             batches += 1
@@ -149,7 +154,7 @@ def main():
     torch.manual_seed(SEED)
     os.makedirs(ART_DIR, exist_ok=True)
     os.makedirs(CKPT_DIR, exist_ok=True)
-    tag = f"acm_{GROUPING}_{TARGET}_k{K}_s{SEED}"
+    tag = f"acm_{GROUPING}_{TARGET}_k{K}_cw{COV_WEIGHT:g}_s{SEED}"
     best_path = os.path.join(CKPT_DIR, f"{tag}_best.pth")
     selection_path = os.path.join(ART_DIR, f"selection_{tag}.json")
 
@@ -206,7 +211,9 @@ def main():
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
     fields = ["epoch", "train_loss", "train_median_loss", "train_mad_loss",
+              "train_var_loss", "train_cov_loss",
               "val_loss", "val_median_loss", "val_mad_loss",
+              "val_var_loss", "val_cov_loss",
               "val_probe_bacc16", "latent_std", "effective_rank",
               "same_group_cos", "cross_group_cos", "mean_valid_stars"]
     metrics_path = os.path.join(ART_DIR, f"metrics_{tag}.csv")
@@ -237,9 +244,13 @@ def main():
         row = {"epoch": epoch, "train_loss": train_metrics["loss"],
                "train_median_loss": train_metrics["median_loss"],
                "train_mad_loss": train_metrics["mad_loss"],
+               "train_var_loss": train_metrics["var_loss"],
+               "train_cov_loss": train_metrics["cov_loss"],
                "val_loss": val_metrics["loss"],
                "val_median_loss": val_metrics["median_loss"],
                "val_mad_loss": val_metrics["mad_loss"],
+               "val_var_loss": val_metrics["var_loss"],
+               "val_cov_loss": val_metrics["cov_loss"],
                "val_probe_bacc16": probe, "latent_std": latent_std,
                "effective_rank": erank, "same_group_cos": same_cos,
                "cross_group_cos": cross_cos,
@@ -253,8 +264,10 @@ def main():
 
     gates = {"effective_rank_ok": bool(best["erank"] >= GATE_MIN_ERANK),
              "same_cos_ok": bool(best["same_cos"] >= GATE_MIN_SAME_COS),
-             "same_gt_cross": bool(best["same_cos"] > best["cross_cos"])}
+             "same_gt_cross": bool(best["same_cos"] > best["cross_cos"]),
+             "probe_ok": bool(best["probe"] > GATE_MIN_PROBE)}
     selection = {"tag": tag, "grouping": GROUPING, "target": TARGET, "k": K,
+                 "cov_weight": COV_WEIGHT,
                  "seed": SEED, "epochs": EPOCHS, "skipped": False,
                  "warmstart": WARMSTART_SELECTION if WARMSTART else None,
                  "best_val_probe_bacc16": best["probe"],

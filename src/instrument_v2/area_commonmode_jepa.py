@@ -89,19 +89,40 @@ def masked_prediction_loss(prediction, target, valid_mask):
     return (per_token * weight).sum() / weight.sum().clamp(min=1e-6)
 
 
+def covariance_penalty(context_tokens):
+    """VICReg-style off-diagonal covariance penalty on the INDIVIDUAL context
+    representation. The spread penalty gives every dimension variance but
+    lets dimensions be redundant copies; this decorrelates them (the v1
+    screen collapsed at effective rank ~8-10). Representation decorrelation
+    only -- no covariance targets, teacher untouched."""
+    z = context_tokens.flatten(1)
+    z = z - z.mean(dim=0)
+    cov = z.T @ z / max(z.shape[0] - 1, 1)
+    offdiag = cov - torch.diag(torch.diag(cov))
+    return offdiag.pow(2).sum() / z.shape[1]
+
+
 def commonmode_loss(pred_median, target_median, pred_mad, target_mad,
-                    context_tokens, valid_mask, mad_weight=0.25, var_weight=0.5):
+                    context_tokens, valid_mask, mad_weight=0.25,
+                    var_weight=0.5, cov_weight=0.0):
     """median loss + MAD_WEIGHT * mad loss + spread penalty on the INDIVIDUAL
-    context tokens and the median prediction. Returns (total, parts)."""
+    context tokens and the median prediction + COV_WEIGHT * off-diagonal
+    covariance penalty. cov_weight=0 reproduces the v1 loss exactly.
+    Returns (total, parts)."""
     median_loss = masked_prediction_loss(pred_median, target_median, valid_mask)
     mad_loss = (masked_prediction_loss(pred_mad, target_mad, valid_mask)
                 if pred_mad is not None else torch.zeros_like(median_loss))
+    var_loss = spread_penalty(context_tokens) + spread_penalty(pred_median)
+    cov_loss = covariance_penalty(context_tokens)
     total = median_loss + mad_weight * mad_loss
     if var_weight > 0.0:
-        total = total + var_weight * (spread_penalty(context_tokens)
-                                      + spread_penalty(pred_median))
+        total = total + var_weight * var_loss
+    if cov_weight > 0.0:
+        total = total + cov_weight * cov_loss
     return total, {"median_loss": float(median_loss.detach()),
-                   "mad_loss": float(mad_loss.detach())}
+                   "mad_loss": float(mad_loss.detach()),
+                   "var_loss": float(var_loss.detach()),
+                   "cov_loss": float(cov_loss.detach())}
 
 
 def load_group_jepa_warmstart(model, selection_path):

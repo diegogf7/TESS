@@ -44,7 +44,7 @@ from src.instrument_v2.sector14_dataset import (
 )
 from src.instrument_v2.train_sector14_jepa import git_commit, seed_worker
 
-ARMS = ("scratch", "groupjepa", "chip_cm", "area_cm")
+ARMS = ("scratch", "groupjepa", "chip_cm", "area_cm", "v1_area", "v2_area")
 INIT_ARM = os.environ.get("INIT_ARM", "area_cm")
 if INIT_ARM not in ARMS:
     raise ValueError(f"INIT_ARM must be one of {ARMS}")
