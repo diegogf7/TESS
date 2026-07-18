@@ -28,8 +28,11 @@ from sklearn.metrics import balanced_accuracy_score
 
 from src.instrument_v2.area_commonmode_jepa import build_area_commonmode_jepa
 from src.instrument_v2.sector14_dataset import ensure_splits, ensure_time_range
-from src.instrument_v2.train_area_commonmode_finetune import Classifier, make_head
-from src.instrument_v2.train_group_level_matched_finetune import build_frames
+from src.instrument_v2.train_area_commonmode_finetune import (
+    Classifier,
+    build_frames,
+    make_head,
+)
 from src.instrument_v2.train_sector14_jepa import git_commit
 
 STAGE = os.environ.get("STAGE", "final")

@@ -35,9 +35,13 @@ from sklearn.metrics import balanced_accuracy_score
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.instrument_v2.area_commonmode_jepa import build_area_commonmode_jepa
+from src.instrument_v2.diagnose_chip_common_signal import chip_index
 from src.instrument_v2.group_level_jepa import build_groupmean_jepa
-from src.instrument_v2.sector14_dataset import ensure_splits, ensure_time_range
-from src.instrument_v2.train_group_level_matched_finetune import build_frames
+from src.instrument_v2.sector14_dataset import (
+    ensure_splits,
+    ensure_time_range,
+    grid_frame,
+)
 from src.instrument_v2.train_sector14_jepa import git_commit, seed_worker
 
 ARMS = ("scratch", "groupjepa", "chip_cm", "area_cm")
@@ -70,6 +74,24 @@ GROUP_SELECTION = os.environ.get(
     os.path.join("artifacts", "instrument_v2", "group_level",
                  f"selection_s14groupmean_k8_s{SEED}.json"))
 INIT_SELECTION = os.environ.get("INIT_SELECTION", "")
+
+
+def build_frames(df, train_tics, val_tics, test_tics, time_range):
+    """Gridded train+val curves with chip labels (same recipe as the group-
+    level matched finetune; inlined because that module validates ITS env
+    vars at import time and rejects our arm names)."""
+    tic = df["TIC"].astype(str)
+    keep = tic.isin(train_tics) | tic.isin(val_tics)
+    frame = df[keep].reset_index(drop=True)
+    if set(frame["TIC"].astype(str)) & set(test_tics):
+        raise RuntimeError("test TIC entered fine-tuning")
+    flux, mask = grid_frame(frame, "shared", time_range)
+    labels = np.asarray(
+        [chip_index(camera, ccd)
+         for camera, ccd in zip(frame["camera"], frame["ccd"])],
+        dtype=np.int64)
+    is_train = frame["TIC"].astype(str).isin(train_tics).to_numpy()
+    return flux, mask, labels, is_train
 
 
 def make_encoder():
