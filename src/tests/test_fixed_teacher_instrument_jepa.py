@@ -195,6 +195,73 @@ def test_finetune_smoke_step_finite():
     assert torch.isfinite(loss) and torch.isfinite(logits).all()
 
 
+# ----------------------------------------------- transformer predictor
+def tiny_tx_student():
+    torch.manual_seed(3)
+    return FixedTeacherInstrumentJEPA(n_tokens=4, token_dim=4, d_model=8,
+                                      n_layers=1,
+                                      predictor_type="transformer")
+
+
+def test_transformer_predictor_shapes():
+    from src.instrument_v2.fixed_teacher_instrument_jepa import (
+        TransformerPredictor,
+    )
+    predictor = TransformerPredictor()          # spec dims: 16 tokens x 16
+    tokens = torch.randn(2, 16, 16)
+    assert predictor(tokens).shape == (2, 16, 16)
+    model = tiny_tx_student().eval()
+    star = torch.randn(3, 64)
+    with torch.no_grad():
+        prediction, target, tokens = model(star, torch.ones_like(star),
+                                           torch.randn(3, 64, 2),
+                                           torch.ones(3, 64))
+    assert prediction.shape == target.shape == tokens.shape == (3, 4, 4)
+
+
+def test_transformer_gradients_student_and_predictor_not_teacher():
+    model = tiny_tx_student()
+    star = torch.randn(4, 64)
+    outputs = model(star, torch.ones_like(star), torch.randn(4, 64, 2),
+                    torch.ones(4, 64))
+    loss = fixed_teacher_loss(*outputs, torch.ones(4, 64))
+    before = model.teacher_hash()
+    loss.backward()
+    assert any(p.grad is not None and p.grad.abs().sum() > 0
+               for p in model.student.parameters())
+    assert any(p.grad is not None and p.grad.abs().sum() > 0
+               for p in model.predictor.parameters())
+    assert all(p.grad is None for p in model.teacher.parameters())
+    assert model.teacher_hash() == before
+
+
+def test_transformer_masked_batches_stay_finite():
+    model = tiny_tx_student().eval()
+    star = torch.randn(3, 64)
+    star_mask = torch.ones_like(star)
+    star_mask[:, 32:48] = 0.0                    # one fully-invalid token
+    with torch.no_grad():
+        prediction, target, _ = model(star, star_mask,
+                                      torch.randn(3, 64, 2), star_mask)
+    assert torch.isfinite(prediction).all() and torch.isfinite(target).all()
+    padding = model._token_padding(star_mask)
+    assert padding.shape == (3, 4) and padding[:, 2].all()
+    assert not padding[:, 0].any()
+
+
+def test_frozen_probe_updates_only_classifier():
+    import numpy as np
+    from src.instrument_v2.train_group_level_jepa import fast_probe
+    model = tiny_tx_student().eval()
+    before = state_hash(model)
+    rng = np.random.default_rng(0)
+    train_z = rng.normal(size=(64, 16))
+    val_z = rng.normal(size=(32, 16))
+    labels = rng.integers(0, 4, 64)
+    fast_probe(train_z, labels, val_z, rng.integers(0, 4, 32))
+    assert state_hash(model) == before           # probe touched nothing
+
+
 if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_")]

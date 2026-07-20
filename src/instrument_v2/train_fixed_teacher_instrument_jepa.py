@@ -44,6 +44,10 @@ from src.instrument_v2.train_sector14_jepa import (
 SEED = int(os.environ.get("SEED", "0"))
 K = int(os.environ.get("K", "8"))
 EPOCHS = int(os.environ.get("EPOCHS", "30"))
+PREDICTOR = os.environ.get("PREDICTOR", "mlp")
+SELECT_VIEW = os.environ.get("SELECT_VIEW", "online")   # online | predicted
+MIN_EPOCHS = int(os.environ.get("MIN_EPOCHS", "1"))
+PATIENCE = int(os.environ.get("PATIENCE", "0"))          # 0 = no early stop
 BATCH = int(os.environ.get("BATCH", "64"))
 LR = float(os.environ.get("LR", "1e-3"))
 VARW = float(os.environ.get("VARW", "0.5"))
@@ -108,7 +112,8 @@ def main():
     torch.manual_seed(SEED)
     os.makedirs(ART_DIR, exist_ok=True)
     os.makedirs(CKPT_DIR, exist_ok=True)
-    tag = f"frtstudent_k{K}_s{SEED}"
+    tag = (f"frtstudent_tx_k{K}_s{SEED}" if PREDICTOR == "transformer"
+           else f"frtstudent_k{K}_s{SEED}")
     ckpt_base = os.path.join(CKPT_DIR, tag)
 
     print(f"git commit: {git_commit()}", flush=True)
@@ -153,13 +158,15 @@ def main():
     val_ccd = val_ds.chips % 4 + 1
 
     fields = ["epoch", "train_loss", "val_loss", "val_camccd_bacc",
-              "val_camera_bacc", "val_ccd_bacc", "effective_rank",
+              "val_pred_camccd_bacc", "val_camera_bacc", "val_ccd_bacc",
+              "effective_rank", "pred_effective_rank",
               "latent_std", "teacher_hash_ok"]
     metrics_path = os.path.join(ART_DIR, f"metrics_{tag}.csv")
     with open(metrics_path, "w", newline="") as handle:
         csv.DictWriter(handle, fieldnames=fields).writeheader()
 
-    best = {"camccd_bacc": -1.0, "epoch": None}
+    best = {"camccd_bacc": -1.0, "select_bacc": -1.0, "epoch": None}
+    epochs_since_best = 0
     for epoch in range(1, EPOCHS + 1):
         train_loss = run_epoch(model, train_loader, optimizer)
         scheduler.step()
@@ -171,36 +178,57 @@ def main():
 
         train_z = individual_latents(model, train_ds, "online")
         val_z = individual_latents(model, val_ds, "online")
+        train_p = individual_latents(model, train_ds, "predicted")
+        val_p = individual_latents(model, val_ds, "predicted")
         camccd_bacc = fast_probe(train_z, train_ds.chips, val_z, val_ds.chips)
+        pred_camccd = fast_probe(train_p, train_ds.chips, val_p, val_ds.chips)
         camera_bacc = fast_probe(train_z, camera, val_z, val_camera)
         ccd_bacc = fast_probe(train_z, ccd, val_z, val_ccd)
         erank = effective_rank(val_z)
+        pred_erank = effective_rank(val_p)
         latent_std = float(val_z.std(axis=0).mean())
 
         row = {"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss,
-               "val_camccd_bacc": camccd_bacc, "val_camera_bacc": camera_bacc,
+               "val_camccd_bacc": camccd_bacc,
+               "val_pred_camccd_bacc": pred_camccd,
+               "val_camera_bacc": camera_bacc,
                "val_ccd_bacc": ccd_bacc, "effective_rank": erank,
+               "pred_effective_rank": pred_erank,
                "latent_std": latent_std, "teacher_hash_ok": hash_ok}
         with open(metrics_path, "a", newline="") as handle:
             csv.DictWriter(handle, fieldnames=fields).writerow(row)
         print(f"student epoch {epoch:03d}: train={train_loss:.5f} "
               f"val={val_loss:.5f} camccd={camccd_bacc:.4f} "
-              f"camera={camera_bacc:.4f} ccd={ccd_bacc:.4f} "
-              f"erank={erank:.1f} std={latent_std:.4f} "
+              f"pred_camccd={pred_camccd:.4f} camera={camera_bacc:.4f} "
+              f"ccd={ccd_bacc:.4f} erank={erank:.1f} "
+              f"pred_erank={pred_erank:.1f} std={latent_std:.4f} "
               f"teacher_hash_ok={hash_ok}", flush=True)
 
         torch.save(model.state_dict(), f"{ckpt_base}_latest.pth")
         if epoch % 5 == 0:
             torch.save(model.state_dict(), f"{ckpt_base}_ep{epoch:03d}.pth")
-        if camccd_bacc > best["camccd_bacc"]:
-            best = {"camccd_bacc": camccd_bacc, "epoch": epoch,
+        # Checkpoint selection metric: camCCD only, on SELECT_VIEW latents.
+        select_bacc = pred_camccd if SELECT_VIEW == "predicted" else camccd_bacc
+        if select_bacc > best["select_bacc"]:
+            best = {"camccd_bacc": camccd_bacc, "pred_camccd_bacc": pred_camccd,
+                    "select_bacc": select_bacc, "select_view": SELECT_VIEW,
+                    "epoch": epoch,
                     "camera_bacc": camera_bacc, "ccd_bacc": ccd_bacc,
-                    "effective_rank": erank, "latent_std": latent_std}
+                    "effective_rank": erank, "pred_effective_rank": pred_erank,
+                    "latent_std": latent_std}
             torch.save(model.state_dict(), f"{ckpt_base}_best.pth")
             torch.save(model.student.state_dict(),
                        f"{ckpt_base}_best_student_encoder.pth")
+            epochs_since_best = 0
+        else:
+            epochs_since_best += 1
+        if PATIENCE and epoch >= MIN_EPOCHS and epochs_since_best >= PATIENCE:
+            print(f"early stop at epoch {epoch} "
+                  f"({epochs_since_best} epochs without improvement)", flush=True)
+            break
 
     selection = {"tag": tag, "seed": SEED, "k": K, "epochs": EPOCHS,
+                 "predictor_type": PREDICTOR, "select_view": SELECT_VIEW,
                  "best": best, "checkpoint": f"{ckpt_base}_best.pth",
                  "encoder_checkpoint": f"{ckpt_base}_best_student_encoder.pth",
                  "teacher_selection": TEACHER_SELECTION,
