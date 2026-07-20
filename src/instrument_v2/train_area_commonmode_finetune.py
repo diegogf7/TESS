@@ -44,7 +44,8 @@ from src.instrument_v2.sector14_dataset import (
 )
 from src.instrument_v2.train_sector14_jepa import git_commit, seed_worker
 
-ARMS = ("scratch", "groupjepa", "chip_cm", "area_cm", "v1_area", "v2_area")
+ARMS = ("scratch", "groupjepa", "chip_cm", "area_cm", "v1_area", "v2_area",
+        "fixed_teacher")
 INIT_ARM = os.environ.get("INIT_ARM", "area_cm")
 if INIT_ARM not in ARMS:
     raise ValueError(f"INIT_ARM must be one of {ARMS}")
@@ -112,6 +113,12 @@ def make_encoder():
         selection = json.load(handle)
     if selection.get("skipped"):
         raise RuntimeError(f"selection {INIT_SELECTION} was skipped")
+    if INIT_ARM == "fixed_teacher":
+        # Stage-B student saved its plain S4Model encoder state separately.
+        encoder = build_area_commonmode_jepa().context_encoder
+        encoder.load_state_dict(torch.load(selection["encoder_checkpoint"],
+                                           map_location="cpu"))
+        return encoder
     model = build_area_commonmode_jepa()
     model.load_state_dict(torch.load(selection["checkpoint"],
                                      map_location="cpu"))
