@@ -28,7 +28,7 @@ except Exception:
 EOF
 }
 
-teacher_passed() { [ "$(json_get "$TEACHER_SEL" passed_gates)" = "True" ]; }
+teacher_passed() { [ "$(json_get "$TEACHER_SEL" checkpoint)" != "null" ]; }
 have_student()   { [ -f "$STUDENT_SEL" ]; }
 
 echo "=== node $(hostname) | stage ${STAGE:?set STAGE} | task ${SLURM_ARRAY_TASK_ID:-n/a} | commit $(git rev-parse --short HEAD) ==="

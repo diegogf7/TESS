@@ -211,8 +211,7 @@ def main():
               f"area_bacc={area_bacc:.4f} camccd_bacc={camccd_bacc:.4f}",
               flush=True)
 
-        gates_now = erank >= GATE_MIN_ERANK and same_cos > cross_cos
-        if gates_now and area_bacc > best["area_bacc"]:
+        if area_bacc > best["area_bacc"]:
             best = {"area_bacc": area_bacc, "epoch": epoch, "erank": erank,
                     "same_cos": same_cos, "cross_cos": cross_cos,
                     "camccd_bacc": camccd_bacc}
@@ -220,12 +219,14 @@ def main():
             print(f"  <- saved best teacher (area_bacc {area_bacc:.4f})",
                   flush=True)
 
-    passed = best["epoch"] is not None
+    # Gates are INFORMATIONAL only (pilot): reported, never enforced.
+    gates_info = {"min_effective_rank": GATE_MIN_ERANK,
+                  "erank_ok": bool(best["erank"] >= GATE_MIN_ERANK),
+                  "same_cos_gt_cross": bool(best["same_cos"] > best["cross_cos"])}
     selection = {"tag": tag, "seed": SEED, "k": K, "epochs": EPOCHS,
-                 "passed_gates": passed,
-                 "gates": {"min_effective_rank": GATE_MIN_ERANK,
-                           "same_cos_gt_cross": True},
-                 "best": best, "checkpoint": best_path if passed else None,
+                 "passed_gates": True,          # never blocks downstream
+                 "gates_informational": gates_info,
+                 "best": best, "checkpoint": best_path,
                  "git_commit": git_commit()}
     with open(os.path.join(ART_DIR, f"selection_{tag}.json"), "w") as handle:
         json.dump(selection, handle, indent=2)

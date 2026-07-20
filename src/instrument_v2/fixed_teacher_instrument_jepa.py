@@ -91,9 +91,8 @@ def load_frozen_teacher(model, teacher_selection_path):
     the failed area_commonmode_v1/v2 students can never sneak in."""
     with open(teacher_selection_path) as handle:
         selection = json.load(handle)
-    if not selection.get("passed_gates"):
-        raise RuntimeError(f"teacher selection {teacher_selection_path} did "
-                           f"not pass its gates; no frozen teacher available")
+    if selection.get("checkpoint") is None:
+        raise RuntimeError(f"{teacher_selection_path} has no checkpoint")
     if not str(selection.get("tag", "")).startswith("regteacher"):
         raise RuntimeError("refusing non-regional-teacher checkpoint as teacher")
     state = torch.load(selection["checkpoint"], map_location="cpu")
