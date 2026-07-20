@@ -109,16 +109,11 @@ def main():
     ax_top.set_title(f"Sector 14, one detector region (camera {camera}, "
                      f"CCD {ccd}, ring {ring}): {len(rows)} individual stars")
 
-    ax_bot.fill_between(grid, median - mad, median + mad, color="#1d6a96",
-                        alpha=0.22, label="star-to-star scatter (MAD)")
-    ax_bot.plot(grid, median, color="#0b3d5c", lw=1.6,
-                label="group fingerprint (median)")
+    ax_bot.plot(grid, median, color="#0b3d5c", lw=1.6)
     ax_bot.axhline(0, color="0.7", lw=0.6)
     ax_bot.set_ylabel("normalized flux")
     ax_bot.set_xlabel("cadence (shared grid index)")
-    ax_bot.set_title(f"Group fingerprint = median of the {len(rows)} stars "
-                     "(noise averaged down; shared shape remains)")
-    ax_bot.legend(frameon=False, loc="upper right", fontsize=9)
+    ax_bot.set_title(f"median of the {len(rows)} stars")
 
     fig.tight_layout()
     out = os.path.join(ART_DIR, "fingerprint_construction.png")

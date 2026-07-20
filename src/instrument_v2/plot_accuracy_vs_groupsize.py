@@ -135,24 +135,15 @@ def main():
     stds = np.array([r["std"] for r in results])
 
     fig, ax = plt.subplots(figsize=(7, 4.6))
-    ax.axhline(CHANCE, color="0.6", ls="--", lw=1, label="chance (1 / 16)")
-    ax.plot(ks, means, "-o", color="#1d6a96", lw=2.2, ms=7,
-            label="linear probe on group fingerprint")
+    ax.axhline(CHANCE, color="0.6", ls="--", lw=1)
+    ax.plot(ks, means, "-o", color="#1d6a96", lw=2.2, ms=7)
     ax.fill_between(ks, means - stds, means + stds, color="#1d6a96", alpha=0.18)
-    ax.annotate("single star", (ks[0], means[0]),
-                textcoords="offset points", xytext=(10, -14), fontsize=10)
-    if 8 in ks:
-        i = ks.index(8)
-        ax.annotate("8-star group", (8, means[i]),
-                    textcoords="offset points", xytext=(-4, 12), fontsize=10)
     ax.set_xscale("log", base=2)
     ax.set_xticks(ks)
     ax.get_xaxis().set_major_formatter(ScalarFormatter())
-    ax.set_xlabel("number of stars pooled per fingerprint (K)")
-    ax.set_ylabel("chip identification accuracy\n(16-way camera x CCD, balanced)")
-    ax.set_title("Instrument identity is a collective property:\n"
-                 "chip accuracy rises as stars are pooled")
-    ax.legend(frameon=False, loc="upper left")
+    ax.set_xlabel("stars pooled together")
+    ax.set_ylabel("chip identification accuracy")
+    ax.set_title("accuracy with logistic regression with star grouping")
     ax.margins(x=0.04)
     fig.tight_layout()
     out = os.path.join(ART_DIR, "accuracy_vs_groupsize.png")
