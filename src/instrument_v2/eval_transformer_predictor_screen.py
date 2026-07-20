@@ -59,6 +59,20 @@ BASE_ART_DIR = os.environ.get(
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def compute_verdict(results):
+    """PRIMARY benchmark (physics frozen-probe protocol): the trained frozen
+    S4D ENCODER, with the Transformer predictor and the teacher both
+    discarded. PASS iff it beats the random frozen S4D encoder. Transformer
+    outputs are diagnostics only and never affect the verdict."""
+    candidate = results["tx_jepa_encoder"]["val_camccd_bacc"]
+    diffs = {"encoder_minus_random_s4d":
+                 candidate - results["random_s4d"]["val_camccd_bacc"],
+             "encoder_minus_mlp_jepa":
+                 candidate - results["mlp_jepa_encoder"]["val_camccd_bacc"]}
+    verdict = "PASS" if diffs["encoder_minus_random_s4d"] > 0 else "FAIL"
+    return diffs, verdict
+
+
 def load_model(selection_path, predictor_type):
     with open(selection_path) as handle:
         selection = json.load(handle)
@@ -110,47 +124,51 @@ def main():
         print(f"{name:22s} camccd={bacc:.4f} "
               f"erank={results[name]['val_effective_rank']:.1f}", flush=True)
 
-    candidate = results["tx_jepa_transformer"]["val_camccd_bacc"]
-    diffs = {"candidate_minus_random_s4d":
-                 candidate - results["random_s4d"]["val_camccd_bacc"],
-             "candidate_minus_random_s4d_tx":
-                 candidate - results["random_s4d_tx"]["val_camccd_bacc"]}
-    verdict = "PASS" if (diffs["candidate_minus_random_s4d"] > 0
-                         and diffs["candidate_minus_random_s4d_tx"] > 0) else "FAIL"
+    diffs, verdict = compute_verdict(results)
 
     summary = {"git_commit": git_commit(),
                "results": results, "diffs": diffs, "verdict": verdict,
                "tx_best_epoch": tx_selection["best"]["epoch"],
+               "tx_select_view": tx_selection.get("select_view"),
                "tx_selection": tx_selection,
                "teacher_hash_verified":
                    tx_selection.get("teacher_hash_verified_every_epoch", False),
                "statements": [
-                   "No encoder or predictor fine-tuning occurred in this "
-                   "screen; all representation parameters were frozen and "
-                   "only the probe classifier was fit.",
-                   "Test TICs were never loaded or evaluated."]}
+                   "Transformer and teacher discarded during evaluation "
+                   "(the benchmark representation is the frozen S4D encoder).",
+                   "No fine-tuning and no test evaluation.",
+                   "Only the probe classifier was fit; all representation "
+                   "parameters stayed frozen."]}
     with open(os.path.join(ART_DIR, "results.json"), "w") as handle:
         json.dump(summary, handle, indent=2, default=float)
 
-    lines = ["# transformer_predictor_screen -- final summary "
-             "(validation-only, frozen)", "",
+    lines = ["# transformer screen -- frozen ENCODER benchmark "
+             "(validation-only)", "",
              f"git commit: {summary['git_commit']}", "",
-             "## Frozen validation camCCD (identical probe harness)"]
-    for name, entry in results.items():
-        marker = "  <- candidate" if name == "tx_jepa_transformer" else ""
+             "## PRIMARY: frozen S4D encoders (physics probe protocol)"]
+    for name in ("random_s4d", "mlp_jepa_encoder", "tx_jepa_encoder"):
+        entry = results[name]
+        marker = "  <- candidate" if name == "tx_jepa_encoder" else ""
         lines.append(f"- {name}: {entry['val_camccd_bacc']:.4f} "
                      f"(erank {entry['val_effective_rank']:.1f}){marker}")
     lines += ["",
-              f"candidate - random_s4d:    "
-              f"{diffs['candidate_minus_random_s4d']:+.4f}",
-              f"candidate - random_s4d_tx: "
-              f"{diffs['candidate_minus_random_s4d_tx']:+.4f}", "",
-              f"Transformer best epoch: {summary['tx_best_epoch']}",
+              f"candidate - random_s4d:  "
+              f"{diffs['encoder_minus_random_s4d']:+.4f}",
+              f"candidate - mlp_jepa:    "
+              f"{diffs['encoder_minus_mlp_jepa']:+.4f}", "",
+              f"best selected epoch: {summary['tx_best_epoch']} "
+              f"(selected on ENCODER camCCD, select_view="
+              f"{summary['tx_select_view']})",
               f"teacher hash verified every training epoch: "
               f"{summary['teacher_hash_verified']}", "",
-              f"## VERDICT: {verdict}",
-              "(PASS requires the pretrained Transformer output to beat both "
-              "random controls)", ""]
+              "## DIAGNOSTICS ONLY (never affect selection or PASS)"]
+    for name in ("tx_jepa_transformer", "random_s4d_tx"):
+        entry = results[name]
+        lines.append(f"- {name}: {entry['val_camccd_bacc']:.4f} "
+                     f"(erank {entry['val_effective_rank']:.1f})")
+    lines += ["", f"## VERDICT: {verdict}",
+              "(PASS requires trained frozen S4D encoder camCCD > random "
+              "frozen S4D encoder camCCD)", ""]
     lines += [f"- {s}" for s in summary["statements"]] + [""]
     md_path = os.path.join(ART_DIR, "final_summary.md")
     with open(md_path, "w") as handle:

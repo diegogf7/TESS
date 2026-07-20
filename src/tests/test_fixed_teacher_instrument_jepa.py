@@ -262,6 +262,35 @@ def test_frozen_probe_updates_only_classifier():
     assert state_hash(model) == before           # probe touched nothing
 
 
+# --------------------------------------- encoder-benchmark protocol
+def test_selection_metric_uses_encoder_view():
+    from src.instrument_v2.train_fixed_teacher_instrument_jepa import (
+        selection_metric,
+    )
+    # online view: encoder camCCD decides, transformer output ignored
+    assert selection_metric("online", 0.30, 0.99) == 0.30
+    assert selection_metric("predicted", 0.30, 0.99) == 0.99
+
+
+def test_pass_verdict_uses_encoder_not_transformer():
+    from src.instrument_v2.eval_transformer_predictor_screen import (
+        compute_verdict,
+    )
+    def results(encoder, random, tx_out):
+        return {"tx_jepa_encoder": {"val_camccd_bacc": encoder},
+                "random_s4d": {"val_camccd_bacc": random},
+                "mlp_jepa_encoder": {"val_camccd_bacc": 0.43},
+                "tx_jepa_transformer": {"val_camccd_bacc": tx_out},
+                "random_s4d_tx": {"val_camccd_bacc": 0.40}}
+    # huge transformer output cannot rescue a losing encoder
+    _, verdict = compute_verdict(results(0.40, 0.42, 0.99))
+    assert verdict == "FAIL"
+    # winning encoder passes even with a terrible transformer output
+    diffs, verdict = compute_verdict(results(0.45, 0.42, 0.01))
+    assert verdict == "PASS"
+    assert abs(diffs["encoder_minus_random_s4d"] - 0.03) < 1e-9
+
+
 if __name__ == "__main__":
     tests = [value for name, value in sorted(globals().items())
              if name.startswith("test_")]

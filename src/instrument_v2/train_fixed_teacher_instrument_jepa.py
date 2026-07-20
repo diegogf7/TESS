@@ -81,6 +81,13 @@ def stack_stats(median, log_mad):
     return torch.stack([median, log_mad], dim=-1)
 
 
+def selection_metric(select_view, encoder_bacc, predicted_bacc):
+    """Checkpoint-selection and early-stopping metric (camCCD only).
+    'online' = the S4D encoder output BEFORE the predictor -- the physics
+    frozen-probe benchmark representation. 'predicted' = predictor output."""
+    return predicted_bacc if select_view == "predicted" else encoder_bacc
+
+
 def run_epoch(model, loader, optimizer=None):
     training = optimizer is not None
     model.train(training)
@@ -208,7 +215,7 @@ def main():
         if epoch % 5 == 0:
             torch.save(model.state_dict(), f"{ckpt_base}_ep{epoch:03d}.pth")
         # Checkpoint selection metric: camCCD only, on SELECT_VIEW latents.
-        select_bacc = pred_camccd if SELECT_VIEW == "predicted" else camccd_bacc
+        select_bacc = selection_metric(SELECT_VIEW, camccd_bacc, pred_camccd)
         if select_bacc > best["select_bacc"]:
             best = {"camccd_bacc": camccd_bacc, "pred_camccd_bacc": pred_camccd,
                     "select_bacc": select_bacc, "select_view": SELECT_VIEW,

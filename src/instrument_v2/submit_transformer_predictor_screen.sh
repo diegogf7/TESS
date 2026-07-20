@@ -15,7 +15,7 @@ LOGDIR=logs/instrument_v2_transformer_screen
 if [ "${DRY_RUN:-0}" = "1" ]; then
   echo "DRY RUN -- would submit: sbatch $COMMON $RUNNER"
   echo "  prereqs: fixed_regional_teacher_v1 teacher+MLP selections must exist"
-  echo "  report:  artifacts/instrument_v2/transformer_predictor_screen/final_summary.md"
+  echo "  report:  artifacts/instrument_v2/transformer_encoder_screen/final_summary.md"
   exit 0
 fi
 
@@ -26,4 +26,4 @@ JOB=$(sbatch --parsable $COMMON -J tx_screen \
   --export="ALL,PY=$PY,REPO=$REPO,PYTHONUNBUFFERED=1" "$RUNNER")
 echo "submitted: $JOB"
 echo "monitor:   tail -f $LOGDIR/screen_$JOB.out"
-echo "report:    cat artifacts/instrument_v2/transformer_predictor_screen/final_summary.md"
+echo "report:    cat artifacts/instrument_v2/transformer_encoder_screen/final_summary.md"
