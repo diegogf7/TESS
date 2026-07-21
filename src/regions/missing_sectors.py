@@ -63,7 +63,7 @@ for i, sid in enumerate(gaia_id):
         "GAIADR3": sid,
         "n_present": len(presents),
         "n_predicted": len(prediction),
-        "n_missing": len(missing)
+        "n_missing": len(missing),
         "missing_sectors": sorted(missing),
     })
 
@@ -74,3 +74,10 @@ final = (pd.DataFrame(rows).sort_values("n_missing", ascending = False).reset_in
 star_number = len(final)
 number_missing = int((final["n_missing"] > 0).sum())
 
+print(f"{number_missing}/{star_number} stars missing >= 1 in sector")
+
+print(final["n_missing"].value_counts().sort_index())
+print(final.head(20))
+
+final.to_parquet(OUT)
+print(f"Wrote {OUT}")
