@@ -11,7 +11,7 @@ from src.instrument_v2.train_sector14_jepa import git_commit
 
 def train_tic_hash(tics):
 
-    final = hashlib.sha256("\n".join(sorted(map(str, tics))).encode()).hexdigest()[:16]
+    return hashlib.sha256("\n".join(sorted(map(str, tics))).encode()).hexdigest()[:16]
 
 def area_group_medians(X, M, rows, group_size, min_valid):
 
@@ -85,4 +85,32 @@ def build_or_load_area_bases(X, M, areas, tics, k, cache_directive, group_size, 
     np.savez(npz, **store)
 
     with open(os.path.join(cache_directive, tag + ".json"), "w") as fh:
+        json.dump({"train_tic_hash": train_tic_hash(tics), "k": k,
+                   "group_size": group_size, "min_valid": min_valid,
+                   "n_train_tics": len(tics), "n_areas": len(bases),
+                   "n_groups_by_area": n_groups_by_area,
+                   "git_commit": git_commit()}, fh, indent = 2)
+
+    return bases
+
+def ridge_reconstruct(median, valid, B, ridge_lambda):
+
+    observed = valid >0 
+    Bv = B[observed]
+    mv = median[observed].astype(np.float64)
+
+    A = Bv.T @ Bv + ridge_lambda * np.eye(B.shape[1])
+    w = np.linalg.solve(A, Bv.T @ mv)
+
+    final = (B @ w).astype(np.float32)
+    return final
+
+def cbv_fingerprint(X, M, rows, B, min_valid, ridge_lambda):
+
+    median, log_mad, valid, _ = group_statistics(X[rows], M[rows], min_valid)
+
+    instrument = ridge_reconstruct(median, valid, B, ridge_lambda)
+
+    return instrument, log_mad, valid
+
 
