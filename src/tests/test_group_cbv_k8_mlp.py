@@ -179,10 +179,12 @@ def test_one_batch_smoke():
     ds = _recon_dataset()
     model = FixedTeacherInstrumentJEPA(n_tokens=16, token_dim=16, d_model=256,
                                        n_layers=4, readout="mean", predictor_type="mlp")
-    ctx_f, ctx_m, median, log_mad, valid, _n, _g = ds[0]
-    ctx_f, ctx_m = ctx_f.unsqueeze(0), ctx_m.unsqueeze(0)
-    stats = stack_stats(median.unsqueeze(0), log_mad.unsqueeze(0))
-    valid = valid.unsqueeze(0)
+    items = [ds[i] for i in range(2)]          # batch of 2: cross-batch spread penalty needs >=2
+    ctx_f = torch.stack([it[0] for it in items])
+    ctx_m = torch.stack([it[1] for it in items])
+    stats = stack_stats(torch.stack([it[2] for it in items]),
+                        torch.stack([it[3] for it in items]))
+    valid = torch.stack([it[4] for it in items])
     before = model.teacher_hash()
     pred, target, tokens = model(ctx_f, ctx_m, stats, valid)
     loss = fixed_teacher_loss(pred, target, tokens, valid)
