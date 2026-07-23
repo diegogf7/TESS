@@ -22,6 +22,14 @@ def test_decoder_output_length_1024():
     assert out.shape == (3, 1024)
 
 
+def test_weight_decoder_outputs_8_and_reconstructs_1024():
+    w = build_decoder(8)(torch.randn(3, 16, 16))
+    assert w.shape == (3, 8)                       # decoder output [batch, 8]
+    B = torch.randn(1024, 8)                       # area basis
+    curve = w @ B.T
+    assert curve.shape == (3, 1024)                # reconstructed curve [batch, 1024]
+
+
 def test_masked_loss_ignores_gaps():
     torch.manual_seed(0)
     p, t = torch.randn(2, 1024), torch.randn(2, 1024)

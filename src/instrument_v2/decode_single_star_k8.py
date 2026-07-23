@@ -54,17 +54,20 @@ CKPT_DIR = os.environ.get(
     "/orcd/scratch/orcd/006/diegogon/checkpoints/custom_group_cbv_k8_mlp_v1")
 STAGE_B_CKPT = os.environ.get(
     "STAGE_B_CKPT", os.path.join(CKPT_DIR, f"group_cbv_mlp_k{K}_s{SEED}_best.pth"))
+MODE = os.environ.get("DECODER_MODE", "direct")           # "direct" (1024 flux) | "weights" (8 CBV)
+assert MODE in ("direct", "weights"), MODE
+_OUT_SUB = "single_star_decode" if MODE == "direct" else "single_star_weight_decode"
 OUT_DIR = os.environ.get(
     "OUT_DIR",
     os.path.join("artifacts", "instrument_v2", "custom_group_cbv_k8_mlp_v1",
-                 "single_star_decode"))
+                 _OUT_SUB))
 
 
-def build_decoder():
+def build_decoder(out_dim=1024):
     final_model = nn.Sequential(
         nn.Flatten(), nn.LayerNorm(256), nn.Linear(256, 512), nn.GELU(),
-        nn.Linear(512, 1024))
-    
+        nn.Linear(512, out_dim))
+
     return final_model
 
 
@@ -128,6 +131,7 @@ def build_decoder_trainset(model, train_ds, bases):
     latitude = []
     target = []
     mask = []
+    basis = []
 
     with torch.no_grad():
 
@@ -143,8 +147,10 @@ def build_decoder_trainset(model, train_ds, bases):
                 latitude.append(teacher_latent(model, reconstruction, log_mad, valid).squeeze(0).cpu().numpy())
                 target.append(reconstruction)
                 mask.append(valid)
-    
-    return (np.stack(latitude).astype(np.float32), np.stack(target).astype(np.float32), np.stack(mask).astype(np.float32))
+                basis.append(B)                       # (1024, 8) area basis, used only in weights mode
+
+    return (np.stack(latitude).astype(np.float32), np.stack(target).astype(np.float32),
+            np.stack(mask).astype(np.float32), np.stack(basis).astype(np.float32))
 
 
 def reference_target(ds, area_rows, i, bases):
@@ -167,15 +173,24 @@ def reference_target(ds, area_rows, i, bases):
 
     return final
 
-def decode(model, decoder, raw, mask):
+def decode(model, decoder, raw, mask, basis=None):
 
     r = torch.tensor(raw, dtype = torch.float32)[None].to(DEVICE)
     #then for the masked part
     m = torch.tensor(mask, dtype = torch.float32)[None].to(DEVICE)
     predicted_latent = model.encode(r, m, view = "predicted")
-    final = decoder(predicted_latent).squeeze(0).detach().cpu().numpy()
+    out = decoder(predicted_latent)
+    if basis is not None:                              # weights mode: 8 weights -> 1024 curve
+        Bt = torch.tensor(basis, dtype=torch.float32).to(DEVICE)     # (1024, 8)
+        out = out @ Bt.T                               # (1,8) @ (8,1024) = (1,1024)
+    return out.squeeze(0).detach().cpu().numpy()
 
-    return final
+
+def predict_weights(model, decoder, raw, mask):
+    r = torch.tensor(raw, dtype=torch.float32)[None].to(DEVICE)
+    m = torch.tensor(mask, dtype=torch.float32)[None].to(DEVICE)
+    w = decoder(model.encode(r, m, view="predicted"))
+    return w.squeeze(0).detach().cpu().numpy()          # (8,)
 
 #the rest of this code is from Claude code 
 
@@ -213,11 +228,12 @@ def main():
           f"predictor {hashes['predictor'][:12]}", flush=True)
 
     # --- train ONLY the decoder ----------------------------------------------
-    Z, T, M = build_decoder_trainset(model, train_ds, bases)
-    print(f"decoder trainset: {len(Z)} teacher-target pairs", flush=True)
-    decoder = build_decoder().to(DEVICE)
+    Z, T, M, A = build_decoder_trainset(model, train_ds, bases)
+    print(f"decoder trainset: {len(Z)} teacher-target pairs (mode={MODE})", flush=True)
+    decoder = build_decoder(K if MODE == "weights" else 1024).to(DEVICE)
     opt = torch.optim.AdamW(decoder.parameters(), lr=LR)
-    Zt, Tt, Mt = torch.from_numpy(Z), torch.from_numpy(T), torch.from_numpy(M)
+    Zt, Tt, Mt, At = (torch.from_numpy(Z), torch.from_numpy(T),
+                      torch.from_numpy(M), torch.from_numpy(A))
     grad_checked = False
     for epoch in range(1, EPOCHS + 1):
         decoder.train()
@@ -226,10 +242,19 @@ def main():
         for s in range(0, len(Zt), BATCH):
             j = idx[s:s + BATCH]
             z, t, m = Zt[j].to(DEVICE), Tt[j].to(DEVICE), Mt[j].to(DEVICE)
-            loss = masked_smooth_l1(decoder(z), t, m)
+            out = decoder(z)
+            if MODE == "weights":                        # 8 weights -> curve via area basis
+                a = At[j].to(DEVICE)                      # (B, 1024, 8)
+                curve = torch.einsum("bk,blk->bl", out, a)
+            else:
+                curve = out
+            loss = masked_smooth_l1(curve, t, m)
             opt.zero_grad()
             loss.backward()
             if not grad_checked:      # only decoder params receive gradients
+                if MODE == "weights":
+                    assert out.shape[1] == K, out.shape          # decoder output [batch, 8]
+                    assert curve.shape[1] == 1024, curve.shape   # reconstructed curve [batch, 1024]
                 assert all(p.grad is None for p in model.parameters())
                 assert any(p.grad is not None for p in decoder.parameters())
                 grad_checked = True
@@ -253,8 +278,9 @@ def main():
         ref, valid = reference_target(val_ds, val_area_rows, i, bases)
         if ref is None:
             continue
-        pred = decode(model, decoder, val_ds.X[i], val_ds.M[i])
-        assert pred.shape == (1024,), f"decoder output length {pred.shape}"
+        basis = bases[int(val_ds.areas[i])] if MODE == "weights" else None
+        pred = decode(model, decoder, val_ds.X[i], val_ds.M[i], basis)
+        assert pred.shape == (1024,), f"reconstructed curve length {pred.shape}"
         c, rm, r2 = masked_metrics(pred, ref, valid)
         if np.isfinite(c) and np.isfinite(rm) and np.isfinite(r2):
             corrs.append(c); rmses.append(rm); r2s.append(r2)
@@ -269,7 +295,9 @@ def main():
                "masked_rmse": iqr_summary("rmse", rmses),
                "masked_r2": iqr_summary("R2", r2s)}
 
-    # --- six fixed validation-star figure ------------------------------------
+    # --- fixed validation-star figure (direct: 2 rows x 5; weights: 6 rows x 6)
+    n_show = 6 if MODE == "weights" else 2
+    n_col = 6 if MODE == "weights" else 5
     eligible = [i for i in range(len(val_ds.X))
                 if reference_target(val_ds, val_area_rows, i, bases)[0] is not None]
     seen, picks = set(), []
@@ -277,14 +305,16 @@ def main():
         a = int(val_ds.areas[i])
         if a not in seen:
             seen.add(a); picks.append(i)
-        if len(picks) == 6:
+        if len(picks) == n_show:
             break
     x = np.arange(1024)
-    fig, axes = plt.subplots(len(picks), 5, figsize=(22, 3 * len(picks)))
+    fig, axes = plt.subplots(len(picks), n_col, figsize=(4.4 * n_col, 3 * len(picks)))
     axes = np.atleast_2d(axes)
     for row, i in enumerate(picks):
         ref, valid = reference_target(val_ds, val_area_rows, i, bases)
-        pred = decode(model, decoder, val_ds.X[i], val_ds.M[i])
+        a = int(val_ds.areas[i])
+        basis = bases[a] if MODE == "weights" else None
+        pred = decode(model, decoder, val_ds.X[i], val_ds.M[i], basis)
         raw_m = np.where(val_ds.M[i] > 0, val_ds.X[i], np.nan)
         obs = valid > 0
         refm = np.where(obs, ref, np.nan)
@@ -294,29 +324,50 @@ def main():
         axes[row, 1].plot(x, refm, lw=0.7, color="tab:blue")
         axes[row, 2].plot(x, predm, lw=0.7, color="tab:orange")
         axes[row, 3].plot(x, refm, lw=0.7, color="tab:blue", label="target")
-        axes[row, 3].plot(x, predm, lw=0.7, color="tab:orange", label="decoded")
+        axes[row, 3].plot(x, predm, lw=0.7, color="tab:orange",
+                          label="prediction" if MODE == "weights" else "decoded")
         axes[row, 4].plot(x, resid, lw=0.6, color="tab:green")
-        axes[row, 0].set_ylabel(f"area {int(val_ds.areas[i])}", fontsize=8)
-    for c, ttl in zip(range(5), ["raw star", "8-star K=8 target", "MLP-decoded",
-                                 "target vs decoded", "raw - decoded"]):
+        if MODE == "weights":                # column 6: the 8 predicted CBV weights
+            w = predict_weights(model, decoder, val_ds.X[i], val_ds.M[i])
+            axes[row, 5].bar(np.arange(K), w, color="tab:purple")
+        axes[row, 0].set_ylabel(f"area {a}", fontsize=8)
+    titles = (["raw star", "8-star K=8 target", "MLP-decoded", "target vs decoded",
+               "predicted physics (raw - instrument)"] if MODE == "direct" else
+              ["raw star", "8-star K=8 target", "8-weight recon", "target vs prediction",
+               "raw - prediction", "8 CBV weights"])
+    for c, ttl in enumerate(titles):
         axes[0, c].set_title(ttl, fontsize=9)
     axes[0, 3].legend(fontsize=6, loc="upper right")
-    fig.suptitle("single-star instrument decode (K=8 group-CBV MLP, frozen Stage-B)")
+    fig.suptitle("single-star instrument decode" if MODE == "direct"
+                 else "single-star weight decode (8 CBV weights, frozen Stage-B)")
     fig.tight_layout(rect=[0, 0, 1, 0.98])
-    fig.savefig(os.path.join(OUT_DIR, "single_star_decode.png"), dpi=130)
+    fig_name = "single_star_decode.png" if MODE == "direct" else "single_star_weight_decode.png"
+    fig.savefig(os.path.join(OUT_DIR, fig_name), dpi=130)
     plt.close(fig)
 
+    vs_direct = None
+    if MODE == "weights":                    # median delta vs the existing direct 1024-output decoder
+        direct_json = os.path.join(os.path.dirname(OUT_DIR), "single_star_decode",
+                                   "final_summary.json")
+        if os.path.exists(direct_json):
+            d = json.load(open(direct_json)).get("metrics", {})
+            vs_direct = {k: round(metrics[k]["median"] - d[k]["median"], 6)
+                         for k in metrics if k in d}
+
     report = {"git_commit": git_commit(), "stage_b_ckpt": STAGE_B_CKPT,
-              "k": K, "ridge_lambda": RIDGE_LAMBDA, "decoder_epochs": EPOCHS,
-              "n_decoder_train_groups": int(len(Z)),
-              "frozen_hashes_unchanged": True, "decoder_output_length": 1024,
+              "decoder_mode": MODE, "k": K, "ridge_lambda": RIDGE_LAMBDA,
+              "decoder_epochs": EPOCHS, "n_decoder_train_groups": int(len(Z)),
+              "frozen_hashes_unchanged": True,
+              "decoder_raw_output_dim": K if MODE == "weights" else 1024,
+              "reconstructed_curve_length": 1024,
               "prediction_and_target_normalization": "identical (both are the "
               "median/MAD-normalized K=8 CBV reconstruction space)",
-              "test_split_loaded": False, "metrics": metrics}
+              "test_split_loaded": False, "metrics": metrics,
+              "vs_direct_decoder_median_delta": vs_direct}
     with open(os.path.join(OUT_DIR, "final_summary.json"), "w") as fh:
         json.dump(report, fh, indent=2)
     print(json.dumps(report, indent=2), flush=True)
-    print(f"wrote {OUT_DIR}/single_star_decode.png + final_summary.json", flush=True)
+    print(f"wrote {OUT_DIR}/{fig_name} + final_summary.json", flush=True)
 
 
 if __name__ == "__main__":
