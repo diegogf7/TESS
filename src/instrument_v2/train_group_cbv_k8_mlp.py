@@ -208,10 +208,10 @@ def train_stage_a(df, train_tics, val_tics, test_tics, t_range, bases):
     assert not (set(train_pairs.base.tics) | set(val_pairs.base.tics)) & test_tics
     train_loader = DataLoader(train_pairs, batch_size=BATCH, num_workers=NUM_WORKERS,
                               worker_init_fn=seed_worker,
-                              generator=torch.Generator().manual_seed(SEED))
+                              generator=torch.Generator().manual_seed(SEED), drop_last=True)
     val_loader = DataLoader(val_pairs, batch_size=BATCH, num_workers=NUM_WORKERS,
                             worker_init_fn=seed_worker,
-                            generator=torch.Generator().manual_seed(SEED))
+                            generator=torch.Generator().manual_seed(SEED), drop_last=True)
 
     model = build_regional_teacher().to(DEVICE)
     optimizer = torch.optim.AdamW((p for p in model.parameters() if p.requires_grad), lr=LR)
@@ -307,10 +307,10 @@ def train_stage_b(df, train_tics, val_tics, test_tics, t_range, bases, teacher_s
     assert not (set(train_ds.tics) | set(val_ds.tics)) & test_tics
     train_loader = DataLoader(train_ds, batch_size=BATCH, num_workers=NUM_WORKERS,
                               worker_init_fn=seed_worker,
-                              generator=torch.Generator().manual_seed(SEED))
+                              generator=torch.Generator().manual_seed(SEED), drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=BATCH, num_workers=NUM_WORKERS,
                             worker_init_fn=seed_worker,
-                            generator=torch.Generator().manual_seed(SEED))
+                            generator=torch.Generator().manual_seed(SEED), drop_last=True)
 
     model = FixedTeacherInstrumentJEPA(n_tokens=16, token_dim=16, d_model=256,
                                        n_layers=4, readout="mean",
