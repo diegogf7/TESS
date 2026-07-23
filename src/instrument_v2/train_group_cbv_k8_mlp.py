@@ -59,7 +59,10 @@ from src.instrument_v2.regional_cbv import (
 )
 
 SEED = int(os.environ.get("SEED", "0"))
-K = int(os.environ.get("K", "8"))
+GROUP_SIZE = int(os.environ.get("GROUP_SIZE", "32"))            # stars per group (sampling + group median)
+CBV_RANK = int(os.environ.get("CBV_RANK", "8"))                # number of CBV/PCA components (basis rank)
+MIN_VALID_STARS = int(os.environ.get("MIN_VALID_STARS", "16"))  # min observed stars for a valid cadence
+assert 1 <= MIN_VALID_STARS <= GROUP_SIZE, (MIN_VALID_STARS, GROUP_SIZE)
 EPOCHS = min(int(os.environ.get("EPOCHS", "15")), 15)
 MIN_EPOCHS = int(os.environ.get("MIN_EPOCHS", "8"))
 PATIENCE = int(os.environ.get("PATIENCE", "4"))
@@ -67,7 +70,6 @@ LR = float(os.environ.get("LR", "1e-3"))
 VARW = float(os.environ.get("VARW", "0.5"))
 BATCH = int(os.environ.get("BATCH", "64"))
 RIDGE_LAMBDA = float(os.environ.get("RIDGE_LAMBDA", "1e-2"))
-GROUP_MIN_VALID = int(os.environ.get("GROUP_MIN_VALID", "4"))
 MAX_BATCHES = int(os.environ.get("MAX_BATCHES", "0"))
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "4"))
 N_PROBE_DRAWS = int(os.environ.get("N_PROBE_DRAWS", "6"))
@@ -84,10 +86,10 @@ CBV_ART_DIR = os.environ.get(
     "CBV_ART_DIR", os.path.join("artifacts", "instrument_v2", "cbv_refinement_screen"))
 ART_DIR = os.environ.get(
     "GROUP_ART_DIR",
-    os.path.join("artifacts", "instrument_v2", "custom_group_cbv_k8_mlp_v1"))
+    os.path.join("artifacts", "instrument_v2", "custom_group32_cbv8_mlp_v1"))
 CKPT_DIR = os.environ.get(
     "CKPT_DIR",
-    "/orcd/scratch/orcd/006/diegogon/checkpoints/custom_group_cbv_k8_mlp_v1")
+    "/orcd/scratch/orcd/006/diegogon/checkpoints/custom_group32_cbv8_mlp_v1")
 
 
 def stack_stats(median, log_mad):
@@ -199,12 +201,14 @@ def group_features(model, pair_dataset, view="online"):
 
 
 def train_stage_a(df, train_tics, val_tics, test_tics, t_range, bases):
-    tag = f"regteacher_cbv_k{K}_s{SEED}"
+    tag = f"regteacher_cbv_g{GROUP_SIZE}_r{CBV_RANK}_mv{MIN_VALID_STARS}_s{SEED}"
     ckpt = os.path.join(CKPT_DIR, f"{tag}_best.pth")
     train_pairs = AreaGroupCBVPairDataset(
-        Sector14GroupStatDataset(df, train_tics, t_range, "area", K), bases, RIDGE_LAMBDA)
+        Sector14GroupStatDataset(df, train_tics, t_range, "area", GROUP_SIZE,
+                                 min_valid=MIN_VALID_STARS), bases, RIDGE_LAMBDA)
     val_pairs = AreaGroupCBVPairDataset(
-        Sector14GroupStatDataset(df, val_tics, t_range, "area", K), bases, RIDGE_LAMBDA)
+        Sector14GroupStatDataset(df, val_tics, t_range, "area", GROUP_SIZE,
+                                 min_valid=MIN_VALID_STARS), bases, RIDGE_LAMBDA)
     assert not (set(train_pairs.base.tics) | set(val_pairs.base.tics)) & test_tics
     train_loader = DataLoader(train_pairs, batch_size=BATCH, num_workers=NUM_WORKERS,
                               worker_init_fn=seed_worker,
@@ -258,7 +262,9 @@ def train_stage_a(df, train_tics, val_tics, test_tics, t_range, bases):
             print(f"[A] early stop at epoch {epoch}", flush=True)
             break
 
-    selection = {"tag": tag, "seed": SEED, "k": K, "ridge_lambda": RIDGE_LAMBDA,
+    selection = {"tag": tag, "seed": SEED, "group_size": GROUP_SIZE,
+                 "cbv_rank": CBV_RANK, "min_valid": MIN_VALID_STARS,
+                 "ridge_lambda": RIDGE_LAMBDA,
                  "best": best, "checkpoint": ckpt, "git_commit": git_commit()}
     sel_path = os.path.join(ART_DIR, f"selection_{tag}.json")
     with open(sel_path, "w") as fh:
@@ -298,12 +304,14 @@ def probe_b(model, train_ds, val_ds):
 
 
 def train_stage_b(df, train_tics, val_tics, test_tics, t_range, bases, teacher_sel_path):
-    tag = f"group_cbv_mlp_k{K}_s{SEED}"
+    tag = f"group_cbv_mlp_g{GROUP_SIZE}_r{CBV_RANK}_mv{MIN_VALID_STARS}_s{SEED}"
     ckpt_base = os.path.join(CKPT_DIR, tag)
-    train_ds = Sector14GroupCBVReconDataset(df, train_tics, t_range, "area", K,
-                                            area_bases=bases, ridge_lambda=RIDGE_LAMBDA)
-    val_ds = Sector14GroupCBVReconDataset(df, val_tics, t_range, "area", K,
-                                          area_bases=bases, ridge_lambda=RIDGE_LAMBDA)
+    train_ds = Sector14GroupCBVReconDataset(df, train_tics, t_range, "area", GROUP_SIZE,
+                                            area_bases=bases, ridge_lambda=RIDGE_LAMBDA,
+                                            min_valid=MIN_VALID_STARS)
+    val_ds = Sector14GroupCBVReconDataset(df, val_tics, t_range, "area", GROUP_SIZE,
+                                          area_bases=bases, ridge_lambda=RIDGE_LAMBDA,
+                                          min_valid=MIN_VALID_STARS)
     assert not (set(train_ds.tics) | set(val_ds.tics)) & test_tics
     train_loader = DataLoader(train_ds, batch_size=BATCH, num_workers=NUM_WORKERS,
                               worker_init_fn=seed_worker,
@@ -364,7 +372,9 @@ def train_stage_b(df, train_tics, val_tics, test_tics, t_range, bases, teacher_s
             print(f"[B] early stop at epoch {epoch}", flush=True)
             break
 
-    selection = {"tag": tag, "seed": SEED, "k": K, "ridge_lambda": RIDGE_LAMBDA,
+    selection = {"tag": tag, "seed": SEED, "group_size": GROUP_SIZE,
+                 "cbv_rank": CBV_RANK, "min_valid": MIN_VALID_STARS,
+                 "ridge_lambda": RIDGE_LAMBDA,
                  "predictor_type": "mlp", "select_view": "online",
                  "metadata_guided": True, "best": best,
                  "checkpoint": f"{ckpt_base}_best.pth",
@@ -383,7 +393,7 @@ def diagnostic_figure(bases, val_ds):
     fig, axes = plt.subplots(max(len(areas), 1), 4, figsize=(18, 3 * max(len(areas), 1)))
     axes = np.atleast_2d(axes)
     for row, area in enumerate(areas):
-        grp = sorted(val_ds.group_rows[area])[:K]
+        grp = sorted(val_ds.group_rows[area])[:GROUP_SIZE]
         median, log_mad, valid, _ = group_statistics(
             val_ds.X[grp], val_ds.M[grp], val_ds.min_valid)
         recon = ridge_reconstruct(median, valid, bases[int(area)], RIDGE_LAMBDA)
@@ -399,10 +409,11 @@ def diagnostic_figure(bases, val_ds):
         axes[row, 1].plot(x, masked(recon), lw=0.7, color="tab:orange")
         axes[row, 2].plot(x, masked(median - recon), lw=0.7, color="tab:green")
         axes[row, 3].plot(x, masked(log_mad), lw=0.7, color="0.4")
-    for c, t in zip(range(4), ["8-star median", "K=8 reconstruction",
+    for c, t in zip(range(4), [f"{GROUP_SIZE}-star median", f"rank-{CBV_RANK} reconstruction",
                                "median - reconstruction", "log-MAD"]):
         axes[0, c].set_title(t, fontsize=9)
-    fig.suptitle(f"custom group CBV K={K} teacher targets (validation groups)")
+    fig.suptitle(f"custom group CBV g{GROUP_SIZE} r{CBV_RANK} mv{MIN_VALID_STARS} "
+                 f"teacher targets (validation groups)")
     fig.tight_layout(rect=[0, 0, 1, 0.97])
     fig.savefig(os.path.join(ART_DIR, "group_cbv_teacher_targets.png"), dpi=130)
     plt.close(fig)
@@ -412,7 +423,7 @@ def diagnostic_figure(bases, val_ds):
     fig2, ax = plt.subplots(figsize=(12, 6))
     for j in range(B.shape[1]):
         ax.plot(x, B[:, j], lw=0.7, label=f"CBV {j + 1}")
-    ax.set_title(f"eight learned CBVs, area {rep}")
+    ax.set_title(f"{CBV_RANK} learned CBVs, area {rep}")
     ax.legend(fontsize=7, ncol=2, loc="upper right")
     fig2.tight_layout()
     fig2.savefig(os.path.join(ART_DIR, "learned_cbvs_area.png"), dpi=130)
@@ -442,11 +453,13 @@ def write_report(stage_a_best, stage_b_best, e0, teacher_hash, bases, train_ds, 
                 if val is not None else f"- group-CBV-MLP - {name}: n/a (not in artifacts)")
 
     lines = [
-        f"# Two-stage custom group-level TGLC CBV JEPA (K={K}, MLP) -- validation-only pilot",
+        f"# Two-stage custom group-level TGLC CBV JEPA "
+        f"(group={GROUP_SIZE}, rank={CBV_RANK}, min_valid={MIN_VALID_STARS}, MLP) -- validation-only pilot",
         "", f"git commit: {git_commit()}",
-        f"config: seed={SEED} K={K} ridge_lambda={RIDGE_LAMBDA} epochs<= {EPOCHS} "
+        f"config: seed={SEED} group_size={GROUP_SIZE} cbv_rank={CBV_RANK} "
+        f"min_valid={MIN_VALID_STARS} ridge_lambda={RIDGE_LAMBDA} epochs<= {EPOCHS} "
         f"min={MIN_EPOCHS} patience={PATIENCE} predictor=mlp",
-        f"CBV bases: {len(bases)} areas x exactly {K} uncentered group-median components", "",
+        f"CBV bases: {len(bases)} areas x exactly {CBV_RANK} uncentered group-median components", "",
         "## Stage A (regional teacher)",
         f"- best validation epoch: {stage_a_best['epoch']}",
         f"- val area balanced acc: {stage_a_best['area_bacc']:.4f}",
@@ -471,9 +484,9 @@ def write_report(stage_a_best, stage_b_best, e0, teacher_hash, bases, train_ds, 
         diff("tx-JEPA ref", ref["tx_jepa"]),
         diff("CBV-refined ref", ref["cbv_refined"]), "",
         "## Guarantees",
-        f"- Stage A used 16 unique same-area training stars per example "
-        f"(two disjoint {K}-star groups).",
-        "- Stage B excluded the context star from its 8 teacher stars.",
+        f"- Stage A used {2 * GROUP_SIZE} unique same-area training stars per example "
+        f"(two disjoint {GROUP_SIZE}-star groups).",
+        f"- Stage B excluded the context star from its {GROUP_SIZE} teacher stars.",
         "- CBV bases used TRAIN TICs only; validation/test TICs never contributed.",
         "- The frozen regional teacher was verified bit-identical every Stage-B epoch.",
         "- The test split was never loaded or evaluated.",
@@ -491,7 +504,8 @@ def main():
     os.makedirs(CKPT_DIR, exist_ok=True)
 
     print(f"git commit: {git_commit()}", flush=True)
-    print(f"config: two-stage group-CBV K={K} ridge={RIDGE_LAMBDA} mlp predictor "
+    print(f"config: two-stage group-CBV group_size={GROUP_SIZE} cbv_rank={CBV_RANK} "
+          f"min_valid={MIN_VALID_STARS} ridge={RIDGE_LAMBDA} mlp predictor "
           f"epochs<= {EPOCHS} min={MIN_EPOCHS} patience={PATIENCE} device={DEVICE}",
           flush=True)
 
@@ -501,12 +515,14 @@ def main():
     train_tics, val_tics, test_tics = ensure_splits(SPLIT_DIR, BASE_ART_DIR)
     t_range = ensure_time_range(BASE_ART_DIR, df, train_tics)
 
-    fit_ds = Sector14GroupStatDataset(df, train_tics, t_range, "area", K)
+    fit_ds = Sector14GroupStatDataset(df, train_tics, t_range, "area", GROUP_SIZE,
+                                      min_valid=MIN_VALID_STARS)
     assert not set(fit_ds.tics) & test_tics, "test TIC in basis-fit set"
     bases = build_or_load_area_bases(fit_ds.X, fit_ds.M, fit_ds.areas,
-                                     sorted(fit_ds.tics), K, ART_DIR, K, GROUP_MIN_VALID)
-    print(f"area CBV bases: {len(bases)} areas, exactly {K} uncentered "
-          f"group-median components, TRAIN stars only", flush=True)
+                                     sorted(fit_ds.tics), CBV_RANK, ART_DIR,
+                                     GROUP_SIZE, MIN_VALID_STARS)
+    print(f"area CBV bases: {len(bases)} areas, exactly {CBV_RANK} uncentered "
+          f"group-median components (groups of {GROUP_SIZE}), TRAIN stars only", flush=True)
 
     print("=== STAGE A: regional teacher ===", flush=True)
     teacher_sel_path, stage_a_best = train_stage_a(

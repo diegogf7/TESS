@@ -31,9 +31,11 @@ from src.instrument_v2.train_sector14_jepa import git_commit
 #these variables are all from CLAUDE bc I kept messing it up
 
 SEED = int(os.environ.get("SEED", "0"))
-K = int(os.environ.get("K", "8"))
+GROUP_SIZE = int(os.environ.get("GROUP_SIZE", "32"))            # stars per group target
+CBV_RANK = int(os.environ.get("CBV_RANK", "8"))                # CBV components = weight-decoder output dim
+MIN_VALID_STARS = int(os.environ.get("MIN_VALID_STARS", "16"))  # min observed stars for a valid cadence
+assert 1 <= MIN_VALID_STARS <= GROUP_SIZE, (MIN_VALID_STARS, GROUP_SIZE)
 RIDGE_LAMBDA = float(os.environ.get("RIDGE_LAMBDA", "1e-2"))
-GROUP_MIN_VALID = int(os.environ.get("GROUP_MIN_VALID", "4"))
 EPOCHS = int(os.environ.get("EPOCHS", "20"))
 BATCH = int(os.environ.get("BATCH", "64"))
 LR = float(os.environ.get("LR", "1e-3"))
@@ -48,18 +50,19 @@ BASE_ART_DIR = os.environ.get(
     "BASE_ART_DIR", os.path.join("artifacts", "instrument_v2", "sector14_jepa"))
 GROUP_ART_DIR = os.environ.get(
     "GROUP_ART_DIR",
-    os.path.join("artifacts", "instrument_v2", "custom_group_cbv_k8_mlp_v1"))
+    os.path.join("artifacts", "instrument_v2", "custom_group32_cbv8_mlp_v1"))
 CKPT_DIR = os.environ.get(
     "CKPT_DIR",
-    "/orcd/scratch/orcd/006/diegogon/checkpoints/custom_group_cbv_k8_mlp_v1")
+    "/orcd/scratch/orcd/006/diegogon/checkpoints/custom_group32_cbv8_mlp_v1")
 STAGE_B_CKPT = os.environ.get(
-    "STAGE_B_CKPT", os.path.join(CKPT_DIR, f"group_cbv_mlp_k{K}_s{SEED}_best.pth"))
+    "STAGE_B_CKPT", os.path.join(
+        CKPT_DIR, f"group_cbv_mlp_g{GROUP_SIZE}_r{CBV_RANK}_mv{MIN_VALID_STARS}_s{SEED}_best.pth"))
 MODE = os.environ.get("DECODER_MODE", "direct")           # "direct" (1024 flux) | "weights" (8 CBV)
 assert MODE in ("direct", "weights"), MODE
 _OUT_SUB = "single_star_decode" if MODE == "direct" else "single_star_weight_decode"
 OUT_DIR = os.environ.get(
     "OUT_DIR",
-    os.path.join("artifacts", "instrument_v2", "custom_group_cbv_k8_mlp_v1",
+    os.path.join("artifacts", "instrument_v2", "custom_group32_cbv8_mlp_v1",
                  _OUT_SUB))
 
 
@@ -137,9 +140,9 @@ def build_decoder_trainset(model, train_ds, bases):
 
         for area, B in bases.items():
             rows = area_rows.get(area, [])
-            for g in range(len(rows) // K):
+            for g in range(len(rows) // GROUP_SIZE):
 
-                group = rows[g * K: (g+1) * K]
+                group = rows[g * GROUP_SIZE: (g+1) * GROUP_SIZE]
                 median, log_mad, valid, _ = group_statistics(train_ds.X[group], train_ds.M[group], train_ds.min_valid)
 
                 reconstruction = ridge_reconstruct(median, valid, B, RIDGE_LAMBDA)
@@ -162,10 +165,10 @@ def reference_target(ds, area_rows, i, bases):
     
     neight = [r for r in area_rows.get(a, []) if r != i]
 
-    if len(neight) < K:
+    if len(neight) < GROUP_SIZE:
         return None, None
-    
-    group = neight[:K]
+
+    group = neight[:GROUP_SIZE]
 
     median, log_mad, valid, _ = group_statistics(ds.X[group], ds.M[group], ds.min_valid)
 
@@ -205,13 +208,15 @@ def main():
     df = ensure_area_column(df)
     train_tics, val_tics, test_tics = ensure_splits(SPLIT_DIR, BASE_ART_DIR)
     t_range = ensure_time_range(BASE_ART_DIR, df, train_tics)
-    train_ds = Sector14GroupStatDataset(df, train_tics, t_range, "area", K)
-    val_ds = Sector14GroupStatDataset(df, val_tics, t_range, "area", K)
+    train_ds = Sector14GroupStatDataset(df, train_tics, t_range, "area", GROUP_SIZE,
+                                        min_valid=MIN_VALID_STARS)
+    val_ds = Sector14GroupStatDataset(df, val_tics, t_range, "area", GROUP_SIZE,
+                                      min_valid=MIN_VALID_STARS)
     assert not (set(train_ds.tics) | set(val_ds.tics)) & test_tics, "test TIC leaked"
 
     bases = build_or_load_area_bases(train_ds.X, train_ds.M, train_ds.areas,
-                                     sorted(train_ds.tics), K, GROUP_ART_DIR, K,
-                                     GROUP_MIN_VALID)
+                                     sorted(train_ds.tics), CBV_RANK, GROUP_ART_DIR,
+                                     GROUP_SIZE, MIN_VALID_STARS)
 
     # --- frozen Stage-B model (student + teacher + predictor all inside) ------
     model = FixedTeacherInstrumentJEPA(n_tokens=16, token_dim=16, d_model=256,
@@ -230,7 +235,7 @@ def main():
     # --- train ONLY the decoder ----------------------------------------------
     Z, T, M, A = build_decoder_trainset(model, train_ds, bases)
     print(f"decoder trainset: {len(Z)} teacher-target pairs (mode={MODE})", flush=True)
-    decoder = build_decoder(K if MODE == "weights" else 1024).to(DEVICE)
+    decoder = build_decoder(CBV_RANK if MODE == "weights" else 1024).to(DEVICE)
     opt = torch.optim.AdamW(decoder.parameters(), lr=LR)
     Zt, Tt, Mt, At = (torch.from_numpy(Z), torch.from_numpy(T),
                       torch.from_numpy(M), torch.from_numpy(A))
@@ -253,7 +258,7 @@ def main():
             loss.backward()
             if not grad_checked:      # only decoder params receive gradients
                 if MODE == "weights":
-                    assert out.shape[1] == K, out.shape          # decoder output [batch, 8]
+                    assert out.shape[1] == CBV_RANK, out.shape   # decoder output [batch, 8]
                     assert curve.shape[1] == 1024, curve.shape   # reconstructed curve [batch, 1024]
                 assert all(p.grad is None for p in model.parameters())
                 assert any(p.grad is not None for p in decoder.parameters())
@@ -329,17 +334,18 @@ def main():
         axes[row, 4].plot(x, resid, lw=0.6, color="tab:green")
         if MODE == "weights":                # column 6: the 8 predicted CBV weights
             w = predict_weights(model, decoder, val_ds.X[i], val_ds.M[i])
-            axes[row, 5].bar(np.arange(K), w, color="tab:purple")
+            axes[row, 5].bar(np.arange(CBV_RANK), w, color="tab:purple")
         axes[row, 0].set_ylabel(f"area {a}", fontsize=8)
-    titles = (["raw star", "8-star K=8 target", "MLP-decoded", "target vs decoded",
-               "predicted physics (raw - instrument)"] if MODE == "direct" else
-              ["raw star", "8-star K=8 target", "8-weight recon", "target vs prediction",
-               "raw - prediction", "8 CBV weights"])
+    titles = (["raw star", f"{GROUP_SIZE}-star r{CBV_RANK} target", "MLP-decoded",
+               "target vs decoded", "predicted physics (raw - instrument)"]
+              if MODE == "direct" else
+              ["raw star", f"{GROUP_SIZE}-star r{CBV_RANK} target", f"{CBV_RANK}-weight recon",
+               "target vs prediction", "raw - prediction", f"{CBV_RANK} CBV weights"])
     for c, ttl in enumerate(titles):
         axes[0, c].set_title(ttl, fontsize=9)
     axes[0, 3].legend(fontsize=6, loc="upper right")
     fig.suptitle("single-star instrument decode" if MODE == "direct"
-                 else "single-star weight decode (8 CBV weights, frozen Stage-B)")
+                 else f"single-star weight decode ({CBV_RANK} CBV weights, frozen Stage-B)")
     fig.tight_layout(rect=[0, 0, 1, 0.98])
     fig_name = "single_star_decode.png" if MODE == "direct" else "single_star_weight_decode.png"
     fig.savefig(os.path.join(OUT_DIR, fig_name), dpi=130)
@@ -355,13 +361,14 @@ def main():
                          for k in metrics if k in d}
 
     report = {"git_commit": git_commit(), "stage_b_ckpt": STAGE_B_CKPT,
-              "decoder_mode": MODE, "k": K, "ridge_lambda": RIDGE_LAMBDA,
+              "decoder_mode": MODE, "group_size": GROUP_SIZE, "cbv_rank": CBV_RANK,
+              "min_valid": MIN_VALID_STARS, "ridge_lambda": RIDGE_LAMBDA,
               "decoder_epochs": EPOCHS, "n_decoder_train_groups": int(len(Z)),
               "frozen_hashes_unchanged": True,
-              "decoder_raw_output_dim": K if MODE == "weights" else 1024,
+              "decoder_raw_output_dim": CBV_RANK if MODE == "weights" else 1024,
               "reconstructed_curve_length": 1024,
               "prediction_and_target_normalization": "identical (both are the "
-              "median/MAD-normalized K=8 CBV reconstruction space)",
+              "median/MAD-normalized CBV reconstruction space)",
               "test_split_loaded": False, "metrics": metrics,
               "vs_direct_decoder_median_delta": vs_direct}
     with open(os.path.join(OUT_DIR, "final_summary.json"), "w") as fh:

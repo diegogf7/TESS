@@ -120,14 +120,22 @@ class Sector14GroupStatDataset(Sector14ChipPairDataset):
     """Context star + same-group median/MAD target curves, shared grid only."""
 
     def __init__(self, df, allowed_tics, t_range, grouping, k,
-                 grid_length=1024, items_per_epoch=None, sector=14):
+                 grid_length=1024, items_per_epoch=None, sector=14,
+                 min_valid=None):
         if grouping not in ("chip", "area"):
             raise ValueError(f"grouping must be 'chip' or 'area', got {grouping!r}")
         if grouping == "area" and "area" not in df.columns:
             raise ValueError("df lacks 'area'; call ensure_area_column first")
         self.grouping = grouping
-        self.k = int(k)
-        self.min_valid = min_valid_stars(self.k)
+        self.k = int(k)                       # group size (stars per group), NOT the CBV rank
+        # min_valid is EXPLICIT. It is a cadence-validity threshold and MUST NOT be
+        # derived from the CBV rank. Legacy callers that omit it keep the old
+        # group-size heuristic; the group-CBV pipeline passes MIN_VALID_STARS.
+        self.min_valid = int(min_valid) if min_valid is not None else min_valid_stars(self.k)
+        if not (1 <= self.min_valid <= self.k):
+            raise ValueError(
+                f"min_valid must satisfy 1 <= min_valid <= group_size; got "
+                f"min_valid={self.min_valid}, group_size={self.k}")
 
         # Mirror the parent's row filtering so per-row areas stay aligned.
         filtered = df[df["sector"] == sector]
