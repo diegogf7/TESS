@@ -70,7 +70,7 @@ def build_decoder():
 
 def masked_smooth_l1(prediction, target, mask):
 
-    per_loss = F.smooth_l1_loss(prediction, target, reduction = "None")
+    per_loss = F.smooth_l1_loss(prediction, target, reduction = "none")
 
     final = (per_loss * mask).sum() / mask.sum().clamp(min = 1.0)
 
@@ -106,7 +106,7 @@ def teacher_latent(model, reconstruction, log_mad, valid):
     return F.layer_norm(tokens, (tokens.shape[-1],))
 
 
-def deterministic_area_row(ds):
+def deterministic_area_rows(ds):
 
     order = np.argsort(np.asarray(ds.tics, dtype = str))
 
@@ -123,7 +123,7 @@ def deterministic_area_row(ds):
 
 def build_decoder_trainset(model, train_ds, bases):
 
-    area_rows = deterministic_area_row(train_ds)
+    area_rows = deterministic_area_rows(train_ds)
 
     latitude = []
     target = []
@@ -140,11 +140,11 @@ def build_decoder_trainset(model, train_ds, bases):
 
                 reconstruction = ridge_reconstruct(median, valid, B, RIDGE_LAMBDA)
 
-                latitude.append(teacher_latent(model, reconstruction, log_mad, valid).unsqueeze(0).cpu().numpy())
+                latitude.append(teacher_latent(model, reconstruction, log_mad, valid).squeeze(0).cpu().numpy())
                 target.append(reconstruction)
                 mask.append(valid)
     
-    return (np.stacak(latitude).astype(np.float32), np.stack(target).astype(np.float32), np.stack(mask).astype(np.float32))
+    return (np.stack(latitude).astype(np.float32), np.stack(target).astype(np.float32), np.stack(mask).astype(np.float32))
 
 
 def reference_target(ds, area_rows, i, bases):
