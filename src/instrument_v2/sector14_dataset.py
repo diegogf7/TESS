@@ -3,9 +3,10 @@
 
 Data contract (see README.md):
   - RAW `flux` column only (TGLC aperture_flux). `flux_cal` is never read.
-  - Every finite raw-flux cadence is retained -- quality flags do NOT remove
-    observations in the primary experiment.
-  - Median/MAD normalization per curve from its observed flux.
+  - Cadences with a bad TESS bit (BAD_TESS_MASK=16437) or nonzero TGLC flag are
+    dropped BEFORE normalization/gridding; they stay missing in the mask (no
+    interpolation). TESS_flags and TGLC_flags are required.
+  - Median/MAD normalization per curve from its quality-clean observed flux.
   - Two grid arms: shared_sector_1024 (one global Sector-14 time range for
     every star) and legacy_local_1024 (per-curve local grid).
   - Unobserved bins hold normalized zero; the observed mask is returned and
@@ -137,20 +138,34 @@ def ensure_time_range(art_dir, df, train_tics):
     return t0, t1
 
 
-def grid_frame(df, arm, t_range, grid_length=GRID_1024):
-    """Normalize (median/MAD) and grid every row of df. RAW flux only.
+BAD_TESS_MASK = 16437  # 1 | 4 | 16 | 32 | 16384
 
-    Retains every finite raw-flux cadence -- quality flags are ignored here
-    by design (primary experiment; see README).
+
+def grid_frame(df, arm, t_range, grid_length=GRID_1024):
+    """Quality-filter, normalize (median/MAD), and grid every row of df.
+
+    Cadences with a bad TESS bit (BAD_TESS_MASK) or any nonzero TGLC flag are
+    dropped BEFORE the median/MAD and before gridding, so flagged measurements
+    never set the normalization nor populate a bin. TESS_flags and TGLC_flags
+    are required; their absence is a hard error. Removed cadences simply stay
+    missing in the observation mask (never interpolated).
     """
+    if "TESS_flags" not in df.columns or "TGLC_flags" not in df.columns:
+        raise RuntimeError("grid_frame requires TESS_flags and TGLC_flags columns "
+                           "for quality filtering; the parquet is missing them")
     n = len(df)
     X = np.zeros((n, grid_length), dtype=np.float32)
     M = np.zeros_like(X)
     for i in range(n):
         time = np.asarray(df["time"].iloc[i], dtype=np.float64)
         flux = np.asarray(df["flux"].iloc[i], dtype=np.float64)   # RAW only
-        finite = np.isfinite(time) & np.isfinite(flux)
-        time, flux = time[finite], flux[finite]
+        tess = np.asarray(df["TESS_flags"].iloc[i], dtype=np.int64)
+        tglc = np.asarray(df["TGLC_flags"].iloc[i], dtype=np.int64)
+        good = (np.isfinite(time) & np.isfinite(flux)
+                & ((tess & BAD_TESS_MASK) == 0) & (tglc == 0))
+        if not good.any():
+            continue                                              # no clean data -> empty row
+        time, flux = time[good], flux[good]
         normed, _, _ = normalize_median_mad(flux)
         if arm == "shared":
             X[i], M[i] = grid_curve_shared(time, normed, *t_range, grid_length)

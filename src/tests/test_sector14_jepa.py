@@ -30,9 +30,9 @@ def synthetic_frame(n_per_chip=6, n_cad=120, with_flags=True, garbage_cal=False)
                 row = {"TIC": f"TIC{tic}", "sector": 14, "camera": camera, "ccd": ccd,
                        "time": time_all[keep],
                        "flux": rng.normal(1000, 30, int(keep.sum()))}
-                if with_flags:
-                    row["TESS_flags"] = (rng.random(int(keep.sum())) < 0.3).astype(int)
-                    row["TGLC_flags"] = (rng.random(int(keep.sum())) < 0.2).astype(int)
+                if with_flags:                       # clean flags by default (grid_frame filters)
+                    row["TESS_flags"] = np.zeros(int(keep.sum()), dtype=int)
+                    row["TGLC_flags"] = np.zeros(int(keep.sum()), dtype=int)
                 if garbage_cal:
                     row["flux_cal"] = np.full(int(keep.sum()), 1e12)
                 rows.append(row)
@@ -120,25 +120,68 @@ def test_only_raw_flux_column_used():
     np.testing.assert_array_equal(ds1.X, ds3.X)
 
 
-def test_quality_flags_do_not_remove_observations():
-    """Primary arm keeps every finite raw-flux cadence, flagged or not."""
-    df = synthetic_frame(with_flags=True)
+def _grid_one_star(tess=None, tglc=None, flux=None, n=300, t0=1683.0, t1=1710.0):
+    """Grid a single synthetic star through grid_frame (shared arm)."""
+    times = np.linspace(t0, t1, n)
+    flux = np.full(n, 1000.0) if flux is None else np.asarray(flux, dtype=float)
+    tess = np.zeros(n, dtype=int) if tess is None else np.asarray(tess, dtype=int)
+    tglc = np.zeros(n, dtype=int) if tglc is None else np.asarray(tglc, dtype=int)
+    df = pd.DataFrame([{"TIC": "T0", "sector": 14, "camera": 1, "ccd": 1,
+                        "time": times, "flux": flux,
+                        "TESS_flags": tess, "TGLC_flags": tglc}])
+    X, M = grid_frame(df, "shared", (t0, t1))
+    return times, X[0], M[0], (t0, t1)
+
+
+def _bin_of(time_value, t0, t1):
+    return int(shared_grid_bin(np.array([time_value]), t0, t1)[0])
+
+
+def _assert_flagged_cadence_removed(tess_bit=0, tglc_val=0, idx=150):
+    tess = np.zeros(300, dtype=int); tglc = np.zeros(300, dtype=int)
+    tess[idx] = tess_bit; tglc[idx] = tglc_val
+    times, _, M, (t0, t1) = _grid_one_star(tess=tess, tglc=tglc)
+    assert M[_bin_of(times[idx], t0, t1)] == 0.0        # flagged cadence -> empty bin
+
+
+def test_grid_frame_requires_flag_columns():
+    df = synthetic_frame().drop(columns=["TESS_flags", "TGLC_flags"])
     t0 = min(float(np.min(t)) for t in df["time"])
     t1 = max(float(np.max(t)) for t in df["time"])
-    X, M = grid_frame(df, "legacy", (t0, t1))
-    for i in range(len(df)):
-        n_finite = int(np.isfinite(np.asarray(df["flux"].iloc[i], dtype=float)).sum())
-        # legacy grid marks bins within 3 cadences of a sample as observed;
-        # with >=85% coverage the observed count must reflect ALL cadences,
-        # not just quality-clean ones (~56% here). A flag-filtered mask would
-        # be far sparser.
-        assert M[i].sum() >= 0.8 * min(n_finite, X.shape[1] * 0.9), \
-            f"row {i}: mask too sparse -- flags may have removed observations"
-    # direct check on the shared grid: observed bins == bins hit by ALL cadences
-    Xs, Ms = grid_frame(df.iloc[:3], "shared", (t0, t1))
-    for i in range(3):
-        bins = shared_grid_bin(np.asarray(df["time"].iloc[i], dtype=float), t0, t1)
-        assert Ms[i].sum() == len(np.unique(bins)), "shared mask dropped flagged cadences"
+    try:
+        grid_frame(df, "shared", (t0, t1))
+    except RuntimeError:
+        return
+    raise AssertionError("grid_frame must fail loudly without TESS_flags/TGLC_flags")
+
+
+def test_flag_32_momentum_dump_removed():
+    _assert_flagged_cadence_removed(tess_bit=32)
+
+
+def test_all_five_tess_flags_removed():
+    for bit in (1, 4, 16, 32, 16384):
+        _assert_flagged_cadence_removed(tess_bit=bit)
+
+
+def test_tglc_nonzero_removed():
+    _assert_flagged_cadence_removed(tglc_val=1)
+    _assert_flagged_cadence_removed(tglc_val=5)
+
+
+def test_clean_cadences_remain():
+    times, _, M, (t0, t1) = _grid_one_star()            # all flags zero
+    assert M[_bin_of(times[150], t0, t1)] == 1.0
+    assert M.sum() > 0
+
+
+def test_removed_cadence_does_not_affect_normalization():
+    flux = 1000.0 + 30.0 * np.sin(np.linspace(0.0, 10.0, 300))
+    flux[150] = 1e9                                      # extreme outlier ...
+    tess = np.zeros(300, dtype=int); tess[150] = 32      # ... that is flagged
+    times, X, M, (t0, t1) = _grid_one_star(tess=tess, flux=flux)
+    assert M[_bin_of(times[150], t0, t1)] == 0.0         # flagged bin stays empty
+    assert np.abs(X).max() < 100.0                       # 1e9 never enters norm or grid
 
 
 def test_test_tics_never_enter_pretraining():
