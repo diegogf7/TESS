@@ -50,20 +50,17 @@ BASE_ART_DIR = os.environ.get(
     "BASE_ART_DIR", os.path.join("artifacts", "instrument_v2", "sector14_jepa"))
 GROUP_ART_DIR = os.environ.get(
     "GROUP_ART_DIR",
-    os.path.join("artifacts", "instrument_v2", "custom_group32_cbv8_mlp_v1"))
+    os.path.join("artifacts", "instrument_v2", "custom_group32_cbv8_mlp_qclean_v1"))
 CKPT_DIR = os.environ.get(
     "CKPT_DIR",
-    "/orcd/scratch/orcd/006/diegogon/checkpoints/custom_group32_cbv8_mlp_v1")
+    "/orcd/scratch/orcd/006/diegogon/checkpoints/custom_group32_cbv8_mlp_qclean_v1")
 STAGE_B_CKPT = os.environ.get(
     "STAGE_B_CKPT", os.path.join(
         CKPT_DIR, f"group_cbv_mlp_g{GROUP_SIZE}_r{CBV_RANK}_mv{MIN_VALID_STARS}_s{SEED}_best.pth"))
 MODE = os.environ.get("DECODER_MODE", "direct")           # "direct" (1024 flux) | "weights" (8 CBV)
 assert MODE in ("direct", "weights"), MODE
 _OUT_SUB = "single_star_decode" if MODE == "direct" else "single_star_weight_decode"
-OUT_DIR = os.environ.get(
-    "OUT_DIR",
-    os.path.join("artifacts", "instrument_v2", "custom_group32_cbv8_mlp_v1",
-                 _OUT_SUB))
+OUT_DIR = os.environ.get("OUT_DIR", os.path.join(GROUP_ART_DIR, _OUT_SUB))
 
 
 def build_decoder(out_dim=1024):
@@ -350,6 +347,36 @@ def main():
     fig_name = "single_star_decode.png" if MODE == "direct" else "single_star_weight_decode.png"
     fig.savefig(os.path.join(OUT_DIR, fig_name), dpi=130)
     plt.close(fig)
+
+    # --- combined qclean panels: context / group median / CBV target / decoder (gaps at flags)
+    if MODE == "direct":
+        cpick = picks[:4]
+        figq, axq = plt.subplots(len(cpick), 4, figsize=(18, 3 * len(cpick)))
+        axq = np.atleast_2d(axq)
+        for row, i in enumerate(cpick):
+            a = int(val_ds.areas[i])
+            neigh = [r for r in val_area_rows.get(a, []) if r != i][:GROUP_SIZE]
+            median, log_mad, valid, _ = group_statistics(val_ds.X[neigh], val_ds.M[neigh],
+                                                         val_ds.min_valid)
+            recon = ridge_reconstruct(median, valid, bases[a], RIDGE_LAMBDA)
+            pred = decode(model, decoder, val_ds.X[i], val_ds.M[i].astype(np.float32))
+            cmask = val_ds.M[i] > 0
+            obs = valid > 0
+
+            def g(arr, m):
+                out = np.full(1024, np.nan); out[m] = arr[m]; return out
+            axq[row, 0].plot(x, g(val_ds.X[i], cmask), lw=0.6, color="0.4")
+            axq[row, 1].plot(x, g(median, obs), lw=0.7, color="tab:blue")
+            axq[row, 2].plot(x, g(recon, obs), lw=0.7, color="tab:green")
+            axq[row, 3].plot(x, g(pred, obs), lw=0.7, color="tab:orange")
+            axq[row, 0].set_ylabel(f"area {a}", fontsize=8)
+        for c, ttl in enumerate(["filtered context star", f"filtered {GROUP_SIZE}-star median",
+                                 "CBV target", "direct decoder output"]):
+            axq[0, c].set_title(ttl, fontsize=9)
+        figq.suptitle("qclean pipeline (flagged cadences appear as gaps in every panel)")
+        figq.tight_layout(rect=[0, 0, 1, 0.98])
+        figq.savefig(os.path.join(OUT_DIR, "qclean_pipeline_panels.png"), dpi=130)
+        plt.close(figq)
 
     vs_direct = None
     if MODE == "weights":                    # median delta vs the existing direct 1024-output decoder

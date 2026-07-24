@@ -86,10 +86,10 @@ CBV_ART_DIR = os.environ.get(
     "CBV_ART_DIR", os.path.join("artifacts", "instrument_v2", "cbv_refinement_screen"))
 ART_DIR = os.environ.get(
     "GROUP_ART_DIR",
-    os.path.join("artifacts", "instrument_v2", "custom_group32_cbv8_mlp_v1"))
+    os.path.join("artifacts", "instrument_v2", "custom_group32_cbv8_mlp_qclean_v1"))
 CKPT_DIR = os.environ.get(
     "CKPT_DIR",
-    "/orcd/scratch/orcd/006/diegogon/checkpoints/custom_group32_cbv8_mlp_v1")
+    "/orcd/scratch/orcd/006/diegogon/checkpoints/custom_group32_cbv8_mlp_qclean_v1")
 
 
 def stack_stats(median, log_mad):

@@ -161,6 +161,10 @@ def grid_frame(df, arm, t_range, grid_length=GRID_1024):
         flux = np.asarray(df["flux"].iloc[i], dtype=np.float64)   # RAW only
         tess = np.asarray(df["TESS_flags"].iloc[i], dtype=np.int64)
         tglc = np.asarray(df["TGLC_flags"].iloc[i], dtype=np.int64)
+        if len(tess) != len(time) or len(tglc) != len(time):
+            raise RuntimeError(
+                f"row {i}: TESS_flags/TGLC_flags length ({len(tess)}/{len(tglc)}) "
+                f"!= time/flux length ({len(time)}) -- misaligned quality flags")
         good = (np.isfinite(time) & np.isfinite(flux)
                 & ((tess & BAD_TESS_MASK) == 0) & (tglc == 0))
         if not good.any():

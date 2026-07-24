@@ -54,7 +54,8 @@ def build_or_load_area_bases(X, M, areas, tics, k, cache_directive, group_size, 
     # rank (r), group size (g) and min-valid (mv) are all independent; every one
     # is in the cache key so an old basis built under a different config can never
     # be silently loaded.
-    tag = f"area_group_cbv_r{k}_g{group_size}_mv{min_valid}_{train_tic_hash(tics)}"
+    tag = (f"area_group_cbv_r{k}_g{group_size}_mv{min_valid}_q16437_tglc0_"
+           f"{train_tic_hash(tics)}")
 
     npz = os.path.join(cache_directive, tag + ".npz")
 
