@@ -58,6 +58,8 @@ def extract_one(path):
                 "sector": int(head.get("SECTOR", -1)),
                 "camera": int(head.get("CAMERA", -1)),
                 "ccd": int(head.get("CCD", -1)),
+                "ra": float(head.get("RA_OBJ", float("nan"))),
+                "dec": float(head.get("DEC_OBJ", float("nan"))),
             }
             for col in EXTRA_COLUMNS:
                 if col in available:
