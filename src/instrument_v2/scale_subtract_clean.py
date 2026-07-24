@@ -41,8 +41,10 @@ from src.instrument_v2.regional_group_teacher import state_hash
 from src.instrument_v2.sector14_dataset import (
     ensure_splits,
     ensure_time_range,
+    grid_curve_shared,
     shared_grid_bin,
 )
+from src.instrument_v2.diagnose_chip_common_signal import normalize_median_mad
 from src.instrument_v2.train_sector14_jepa import git_commit
 
 BAD_TESS_MASK = 1 | 4 | 16 | 32 | 16384          # == 16437
@@ -81,15 +83,21 @@ def cadence_good(tess, tglc):
     return ((tess & BAD_TESS_MASK) == 0) & (tglc == 0)
 
 
-def quality_grid_mask(time, flux, tess, tglc, t0, t1, grid_length=GRID):
-    """Grid bins that carry at least one GOOD (finite + flag-clean) cadence."""
+def prepare_good(time, flux, tess, tglc, t0, t1, grid_length=GRID):
+    """Quality-filter BEFORE normalization/gridding. Only good (finite +
+    flag-clean) cadences set the median/MAD and populate the shared grid;
+    flagged / non-finite measurements never contribute to any bin.
+
+    Returns (model_input[1024], valid_mask[1024] bool, median, mad).
+    """
     time = np.asarray(time, dtype=np.float64)
     flux = np.asarray(flux, dtype=np.float64)
     good = np.isfinite(time) & np.isfinite(flux) & cadence_good(tess, tglc)
-    q = np.zeros(grid_length, dtype=bool)
-    if good.any():
-        q[shared_grid_bin(time[good], t0, t1, grid_length)] = True
-    return q
+    if not good.any():
+        return np.zeros(grid_length), np.zeros(grid_length, dtype=bool), 0.0, 0.0
+    normed, med, mad = normalize_median_mad(flux[good])                 # good-only stats
+    X, M = grid_curve_shared(time[good], normed, t0, t1, grid_length)   # good-only grid
+    return X.astype(np.float64), M > 0, float(med), float(mad)
 
 
 # ---------------------------------------------------------------- amplitude
@@ -176,27 +184,30 @@ def main():
 
     corrs, rms_before, rms_after, fracs, all_amps, skipped = [], [], [], [], [], 0
     per_star = {}
-    for i in range(len(val_ds.X)):
+    for i in range(len(val_ds.tics)):
         tic = str(val_ds.tics[i])
         rec = flags.loc[tic]
         if rec["TESS_flags"] is None or rec["TGLC_flags"] is None:
             skipped += 1
             continue
-        base_mask = val_ds.M[i] > 0
-        q = quality_grid_mask(rec["time"], rec["flux"],
-                              rec["TESS_flags"], rec["TGLC_flags"], *t_range)
-        mask = base_mask & q
-        if mask.sum() < MIN_SEG:
+        t = np.asarray(rec["time"], dtype=np.float64)
+        f = np.asarray(rec["flux"], dtype=np.float64)
+        finite = np.isfinite(t) & np.isfinite(f)
+        good = finite & cadence_good(rec["TESS_flags"], rec["TGLC_flags"])
+        raw, mask, med, mad = prepare_good(rec["time"], rec["flux"],
+                                           rec["TESS_flags"], rec["TGLC_flags"], *t_range)
+        if mask.sum() < 64:                       # too few good grid bins -> skip
             skipped += 1
             continue
-        raw = val_ds.X[i].astype(np.float64)
-        template = decode(model, decoder, val_ds.X[i], mask.astype(np.float32)).astype(np.float64)
+        template = decode(model, decoder, raw, mask.astype(np.float32)).astype(np.float64)
         instrument, cleaned, amps = scale_and_subtract(raw, template, mask)
+        instrument[~mask] = np.nan                 # rejected bins: NaN, never exported
+        cleaned[~mask] = np.nan
 
         corrs.append(masked_corr(raw, instrument, mask))
         rms_before.append(rms(raw, mask))
         rms_after.append(rms(cleaned, mask))
-        fracs.append(float((base_mask.sum() - mask.sum()) / max(1, base_mask.sum())))
+        fracs.append(float((finite.sum() - good.sum()) / max(1, finite.sum())))
         all_amps.extend(amps)
         per_star[tic] = {"area": int(val_ds.areas[i]), "amplitudes": amps,
                          "raw_vs_instrument_corr": corrs[-1],
@@ -215,7 +226,7 @@ def main():
 
     # --- six-star diagnostic figure (2 rows shown per area, 6 columns) --------
     seen, picks = set(), []
-    for i in range(len(val_ds.X)):
+    for i in range(len(val_ds.tics)):
         if str(val_ds.tics[i]) in per_star and int(val_ds.areas[i]) not in seen:
             seen.add(int(val_ds.areas[i])); picks.append(i)
         if len(picks) == 6:
@@ -225,14 +236,18 @@ def main():
     axes = np.atleast_2d(axes)
     for row, i in enumerate(picks):
         rec = flags.loc[str(val_ds.tics[i])]
-        base_mask = val_ds.M[i] > 0
-        q = quality_grid_mask(rec["time"], rec["flux"], rec["TESS_flags"],
-                              rec["TGLC_flags"], *t_range)
-        mask = base_mask & q
-        raw = val_ds.X[i].astype(np.float64)
-        template = decode(model, decoder, val_ds.X[i], mask.astype(np.float32)).astype(np.float64)
+        tt = np.asarray(rec["time"], dtype=np.float64)
+        ff = np.asarray(rec["flux"], dtype=np.float64)
+        raw, mask, med, mad = prepare_good(rec["time"], rec["flux"],
+                                           rec["TESS_flags"], rec["TGLC_flags"], *t_range)
+        template = decode(model, decoder, raw, mask.astype(np.float32)).astype(np.float64)
         instrument, cleaned, _ = scale_and_subtract(raw, template, mask)
-        removed = base_mask & ~q                       # had data, rejected by flags
+        instrument[~mask] = np.nan
+        cleaned[~mask] = np.nan
+        bad = np.isfinite(tt) & np.isfinite(ff) & ~cadence_good(rec["TESS_flags"], rec["TGLC_flags"])
+        sc = 1.4826 * mad if mad > 0 else 1.0
+        bad_bins = shared_grid_bin(tt[bad], *t_range)
+        bad_vals = (ff[bad] - med) / sc                # flagged points in the good-normalized frame
 
         def mk(a, m):
             out = np.full(GRID, np.nan); out[m] = a[m]; return out
@@ -243,7 +258,7 @@ def main():
         axes[row, 3].plot(x, mk(instrument, mask), lw=0.7, color="tab:red", label="instrument")
         axes[row, 4].plot(x, mk(cleaned, mask), lw=0.6, color="tab:green")
         axes[row, 5].plot(x, mk(raw, mask), lw=0.4, color="0.7")
-        axes[row, 5].plot(x[removed], raw[removed], ".", ms=3, color="tab:red")
+        axes[row, 5].plot(bad_bins, bad_vals, ".", ms=3, color="tab:red")
         axes[row, 0].set_ylabel(f"area {int(val_ds.areas[i])}", fontsize=8)
     for c, t in enumerate(["raw", "direct decoder output", "scaled instrument",
                            "raw vs instrument", "cleaned (raw - instrument)",
@@ -259,7 +274,8 @@ def main():
         "git_commit": git_commit(), "stage_b_ckpt": STAGE_B_CKPT,
         "decoder_ckpt": DECODER_CKPT, "decoder_mode": "direct",
         "decoder_raw_output_dim": 1024, "quality_mask": BAD_TESS_MASK,
-        "n_stars": len(corrs), "n_skipped_no_flags_or_too_short": int(skipped),
+        "model_input": "good-cadence-only median/MAD normalized shared grid",
+        "n_stars": len(corrs), "n_skipped_no_flags_or_under_64_bins": int(skipped),
         "fraction_cadences_removed": iqr("frac_removed", fracs),
         "fitted_amplitude": iqr("amplitude", all_amps),
         "raw_vs_instrument_corr": iqr("corr", corrs),

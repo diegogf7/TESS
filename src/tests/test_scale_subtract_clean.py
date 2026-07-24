@@ -12,12 +12,14 @@ from src.instrument_v2.scale_subtract_clean import (
     BAD_TESS_MASK,
     cadence_good,
     decode,
+    prepare_good,
     robust_amplitude,
     scale_and_subtract,
 )
 from src.instrument_v2.decode_single_star_k8 import build_decoder
 from src.instrument_v2.fixed_teacher_instrument_jepa import FixedTeacherInstrumentJEPA
 from src.instrument_v2.regional_group_teacher import state_hash
+from src.instrument_v2.sector14_dataset import shared_grid_bin
 
 
 def test_mask_value_is_16437():
@@ -81,6 +83,32 @@ def test_output_length_1024_and_hashes_unchanged():
     assert template.shape == (1024,)
     after = (state_hash(model.teacher), state_hash(model.student), state_hash(model.predictor))
     assert after == before                                    # frozen nets untouched
+
+
+def test_flagged_extreme_value_cannot_affect_normalization():
+    t = np.linspace(0.0, 27.0, 600)
+    f = 100.0 + np.sin(t)                                     # good flux ~ 100 +/- 1
+    tess = np.zeros(600, dtype=int); tglc = np.zeros(600, dtype=int)
+    f[300] = 1e9; tess[300] = 32                              # extreme outlier, momentum-dump flagged
+    _, mask, med, mad = prepare_good(t, f, tess, tglc, 0.0, 27.0)
+    assert 99.0 < med < 101.0 and mad < 5.0                   # outlier excluded -> stats stay sane
+    assert mask.sum() >= 64
+
+
+def test_rejected_output_bins_are_nan():
+    t = np.linspace(0.0, 27.0, 900)
+    f = 100.0 + np.sin(t)
+    tess = np.zeros(900, dtype=int); tglc = np.zeros(900, dtype=int)
+    tess[300:380] = 16384                                     # a flagged block
+    raw, mask, med, mad = prepare_good(t, f, tess, tglc, 0.0, 27.0)
+    mid_bins = np.unique(shared_grid_bin(t[320:360], 0.0, 27.0))
+    assert not mask[mid_bins].any()                           # flagged cadences -> invalid bins
+    instrument, cleaned, _ = scale_and_subtract(raw, raw.copy(), mask)
+    instrument[~mask] = np.nan
+    cleaned[~mask] = np.nan
+    assert np.isnan(instrument[mid_bins]).all()               # -> NaN in exported curves
+    assert np.isnan(cleaned[mid_bins]).all()
+    assert np.isfinite(instrument[mask]).all()
 
 
 if __name__ == "__main__":
