@@ -21,11 +21,13 @@ export GROUP_SIZE=${GROUP_SIZE:-32}
 export CBV_RANK=${CBV_RANK:-8}
 export MIN_VALID_STARS=${MIN_VALID_STARS:-16}
 
-# ---- dense data defaults (group size 32 needs the dense parquet; overridable) ---
-DENSE=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_cadence_s14_dense.parquet
-export S14_DATA=${S14_DATA:-$DENSE}
-export SPLIT_DIR=${SPLIT_DIR:-artifacts/instrument_v2/dense_split}
-export BASE_ART_DIR=${BASE_ART_DIR:-artifacts/instrument_v2/sector14_jepa_dense}
+# ---- dense_v2 data defaults (group 32 rank 8 needs >=256 train/area; only the
+#      v2 set clears that -- min 313/area. The old dense set has min 70 and fails
+#      the SVD, so v2 is the default here; overridable). ---
+DENSE_V2=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_cadence_s14_dense_v2.parquet
+export S14_DATA=${S14_DATA:-$DENSE_V2}
+export SPLIT_DIR=${SPLIT_DIR:-artifacts/instrument_v2/dense_v2_split}
+export BASE_ART_DIR=${BASE_ART_DIR:-artifacts/instrument_v2/sector14_jepa_dense_v2}
 
 echo "=== node: $(hostname) ==="
 nvidia-smi || true
