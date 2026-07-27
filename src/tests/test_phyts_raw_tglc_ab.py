@@ -64,6 +64,13 @@ def test_duplicate_raw_match_hard_fails():
     assert raised
 
 
+def test_unrelated_duplicate_raw_is_dropped_not_fatal():
+    phyts = pd.DataFrame({"TIC": ["A"], "sector": [14], "label": ["ECLIPSE"]})
+    tglc = _tglc(["A", "B", "B"], [14, 14, 14])        # B duplicated but PhyTS never uses it
+    matched, _ = match_phyts_tglc(phyts, tglc)          # must NOT raise
+    assert list(matched["TIC"]) == ["A"]
+
+
 def test_changing_phyts_flux_does_not_change_arms():
     tglc = _tglc(["A"], [14])
     # the eval keeps only TIC/sector/label from PhyTS, so PhyTS flux can't enter

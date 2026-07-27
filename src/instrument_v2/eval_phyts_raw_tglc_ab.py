@@ -60,9 +60,17 @@ def quality_filter(time, flux, tess, tglc):
 
 def match_phyts_tglc(phyts, tglc):
     """Match each PhyTS row to exactly one raw TGLC row on (TIC, sector).
-    Hard-fail on duplicate (TIC, sector) in TGLC; return (matched, unmatched)."""
-    if tglc.duplicated(["TIC", "sector"]).any():
-        raise RuntimeError("duplicate (TIC, sector) in raw TGLC -- ambiguous match, aborting")
+    Hard-fail only if a PhyTS star hits a DUPLICATED (TIC, sector) in TGLC (an
+    ambiguous match); duplicated TGLC keys that no PhyTS row uses are dropped."""
+    dup = tglc.duplicated(["TIC", "sector"], keep=False)
+    if dup.any():
+        dup_keys = tglc.loc[dup, ["TIC", "sector"]].drop_duplicates()
+        hit = phyts.merge(dup_keys, on=["TIC", "sector"], how="inner")
+        if len(hit):
+            raise RuntimeError(
+                f"{len(hit)} PhyTS rows match a duplicated (TIC, sector) in raw TGLC "
+                f"-- ambiguous, aborting. TICs: {sorted(hit['TIC'].astype(str).unique())[:20]}")
+        tglc = tglc.drop_duplicates(["TIC", "sector"], keep="first")   # unrelated dups, safe to drop
     merged = phyts.merge(tglc, on=["TIC", "sector"], how="left", indicator=True)
     matched = merged[merged["_merge"] == "both"].drop(columns="_merge").reset_index(drop=True)
     unmatched = merged[merged["_merge"] == "left_only"].drop(columns="_merge")
