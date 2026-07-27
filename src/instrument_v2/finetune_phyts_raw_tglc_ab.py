@@ -61,23 +61,38 @@ BATCH = 128
 
 
 # ------------------------------------------------------- native-grid cleaning
-def cleaned_native_flux(ft, ff, inst, decoder, t0, t1):
-    """Subtract the decoded instrument ON the original cadence grid (no double
-    resample): grid onto the S14 shared grid for the instrument model, decode,
-    interpolate the template back to native times, subtract in flux units."""
+def decode_native_template(ft, ff, inst, decoder, t0, t1):
+    """Decode the instrument template ONCE and return every quantity the native-
+    and grid-cleaning arms need (X, mask, decoded template, median/scale, grid
+    times). This is the exact front half of cleaned_native_flux -- unchanged
+    numerics; it just lets a caller reuse one decode across several arms.
+    `decoded` is None when the curve has <8 shared-grid bins (no cleaning)."""
     normed, med, mad = normalize_median_mad(ff)
     scale = 1.4826 * mad if 1.4826 * mad > 0 else 1.0
     X, M = grid_curve_shared(ft, normed, t0, t1, GRID)
     valid = M > 0
-    if valid.sum() < 8:
-        return np.asarray(ff, dtype=np.float64)               # too few bins -> no cleaning
-    with torch.no_grad():
-        z = inst.encode(torch.tensor(X, dtype=torch.float32, device=DEVICE)[None],
-                        torch.tensor(M, dtype=torch.float32, device=DEVICE)[None], view="predicted")
-        decoded = decoder(z).squeeze(0).detach().cpu().numpy()   # (1024,) normalized instrument
     grid_times = t0 + (np.arange(GRID) + 0.5) / GRID * (t1 - t0)
-    dec_native = np.interp(np.asarray(ft, float), grid_times[valid], decoded[valid])
-    return np.asarray(ff, dtype=np.float64) - dec_native * scale   # native-grid subtraction
+    decoded = None
+    if valid.sum() >= 8:
+        with torch.no_grad():
+            z = inst.encode(torch.tensor(X, dtype=torch.float32, device=DEVICE)[None],
+                            torch.tensor(M, dtype=torch.float32, device=DEVICE)[None], view="predicted")
+            decoded = decoder(z).squeeze(0).detach().cpu().numpy()   # (1024,) normalized instrument
+    return {"X": X, "M": M, "valid": valid, "decoded": decoded,
+            "med": med, "scale": scale, "grid_times": grid_times}
+
+
+def cleaned_native_flux(ft, ff, inst, decoder, t0, t1, template=None):
+    """Subtract the decoded instrument ON the original cadence grid (no double
+    resample): decode on the S14 shared grid, interpolate the template back to
+    native times, subtract in flux units. Behaviour is unchanged; `template`
+    lets a caller pass a precomputed decode (decode once, reuse)."""
+    tpl = template if template is not None else decode_native_template(ft, ff, inst, decoder, t0, t1)
+    if tpl["decoded"] is None:
+        return np.asarray(ff, dtype=np.float64)               # too few bins -> no cleaning
+    valid = tpl["valid"]
+    dec_native = np.interp(np.asarray(ft, float), tpl["grid_times"][valid], tpl["decoded"][valid])
+    return np.asarray(ff, dtype=np.float64) - dec_native * tpl["scale"]   # native-grid subtraction
 
 
 def _ordered_hash(*cols):
