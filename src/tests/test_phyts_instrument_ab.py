@@ -28,7 +28,7 @@ def _tiny_instrument():
     m = FixedTeacherInstrumentJEPA(n_tokens = 16, token_dim = 16, d_model = 32, n_layers = 1, readout = "mean", predictor_type = "mlp")
 
     m.eval()
-    for p in m.trainable_parameters():
+    for p in m.parameters():
         p.requires_grad_(False)
     
     return m
@@ -42,17 +42,17 @@ def test_arm_a_matches_dualeval_dataset():
         time = np.linspace(1683.0, 1710.0, 400)
         rows.append({"TIC": f"T{i}", "sector": 14, "label": CLASSES[i % len(CLASSES)], "time": time, "flux": rng.normal(1000, 30, 400)})
 
-        path = os.path.join(tempfile.mkdtemp(), "phyts.parquet")
-        pd.DataFrame(rows).to_parquet(path)
+    path = os.path.join(tempfile.mkdtemp(), "phyts.parquet")
+    pd.DataFrame(rows).to_parquet(path)
 
-        ds = DualEvalDataset(path, 1024)
+    ds = DualEvalDataset(path, 1024)
 
-        for i in range(len(ds)):
-            gf, ob, _, _ = ds[i]
+    for i in range(len(ds)):
+        gf, ob, _, _ = ds[i]
 
-            a_x, a_m = physics_grid(ds.df["time"].iloc[i]. ds.df["flux"].iloc[i])
-            assert np.allclose(a_x, gf.numpy(), atol = 1e-5)
-            assert np.allclose(a_m, ob.numpy())
+        a_x, a_m = physics_grid(ds.df["time"].iloc[i], ds.df["flux"].iloc[i])
+        assert np.allclose(a_x, gf.numpy(), atol = 1e-5)
+        assert np.allclose(a_m, ob.numpy())
 
 def test_instrument_clean_subtraction_no_scale_fit():
 
@@ -71,7 +71,7 @@ def test_instrument_clean_subtraction_no_scale_fit():
     X, M = grid_curve_shared(time, normed, T0, T1, 1024)
 
     with torch.no_grad():
-        z = model.encode(torch.tensor(X, dtype = torch.float32)[None], torch.tenosr(M, dtype = torch.float32)[None], view = "predicted")
+        z = model.encode(torch.tensor(X, dtype = torch.float32)[None], torch.tensor(M, dtype = torch.float32)[None], view = "predicted")
         decoded = decoder(z).squeeze(0).numpy()
 
     valid = M >0
@@ -80,7 +80,7 @@ def test_instrument_clean_subtraction_no_scale_fit():
 
 def test_matched_split_is_tic_disjoin_and_deterministic():
 
-    tics = np.array([f"T{i // 3}" for i in range(6)])
+    tics = np.array([f"T{i // 3}" for i in range(60)])
     y= np.array([i % 4 for i in range(60)])
     tr, te = matched_split(tics, y)
 
@@ -128,7 +128,7 @@ def test_model_hashes_unchanged_after_cleaning():
     assert after == before
 
 if __name__ == "__main__":
-    tests = [v for name, v in sorted(globals().items()) if name.starswith("test_")]
+    tests = [v for name, v in sorted(globals().items()) if name.startswith("test_")]
 
     for test in tests:
         test()
