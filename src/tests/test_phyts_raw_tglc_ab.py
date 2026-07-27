@@ -44,50 +44,40 @@ def _tglc(tics, sectors):
         "TESS_flags": [np.zeros(5, int)] * n, "TGLC_flags": [np.zeros(5, int)] * n})
 
 
-def test_matching_uses_exactly_tic_and_sector():
-    phyts = pd.DataFrame({"TIC": ["A", "B"], "sector": [14, 14],
-                          "label": ["ECLIPSE", "APERIODIC"]})
-    tglc = _tglc(["A", "B"], [14, 13])                 # B is sector 13 -> should NOT match
-    matched, unmatched = match_phyts_tglc(phyts, tglc)
-    assert list(matched["TIC"]) == ["A"]
-    assert list(unmatched["TIC"]) == ["B"]
+def test_matching_uses_gaia_dr3_not_tic():
+    # a TIC blend: one TIC, two Gaia sources -> each matched to its OWN Gaia curve
+    phyts = pd.DataFrame({"TIC": ["A", "A"], "sector": [14, 14],
+                          "phyts_gaia": [100, 200], "label": ["ECLIPSE", "APERIODIC"]})
+    tglc = _tglc(["A", "A"], [14, 14]); tglc["GAIADR3"] = [100, 200]
+    matched, _ = match_phyts_tglc(phyts, tglc)
+    assert len(matched) == 2 and sorted(matched["GAIADR3"]) == [100, 200]
+    # a PhyTS Gaia absent from TGLC -> unmatched
+    m0, u0 = match_phyts_tglc(pd.DataFrame({"TIC": ["A"], "sector": [14],
+                                            "phyts_gaia": [999], "label": ["ECLIPSE"]}), tglc)
+    assert len(m0) == 0 and len(u0) == 1
 
 
-def test_duplicate_raw_match_hard_fails():
-    phyts = pd.DataFrame({"TIC": ["A"], "sector": [14], "label": ["ECLIPSE"]})
-    tglc = _tglc(["A", "A"], [14, 14])                 # duplicate (TIC, sector)
-    raised = False
-    try:
-        match_phyts_tglc(phyts, tglc)
-    except RuntimeError:
-        raised = True
-    assert raised
+def test_same_gaia_multichip_deduped_not_fatal():
+    phyts = pd.DataFrame({"TIC": ["A"], "sector": [14], "phyts_gaia": [100], "label": ["ECLIPSE"]})
+    tglc = _tglc(["A", "A"], [14, 14]); tglc["GAIADR3"] = [100, 100]     # same Gaia, two chips
+    matched, _ = match_phyts_tglc(phyts, tglc)                           # must NOT raise
+    assert len(matched) == 1 and matched["GAIADR3"].iloc[0] == 100
 
 
-def test_same_star_duplicate_kept_not_fatal():
-    phyts = pd.DataFrame({"TIC": ["A"], "sector": [14], "label": ["ECLIPSE"]})
-    tglc = _tglc(["A", "A"], [14, 14])
-    tglc["GAIADR3"] = [999, 999]                        # same star on two chips -> same GaiaDR3
-    matched, _ = match_phyts_tglc(phyts, tglc)          # must NOT raise
-    assert len(matched) == 1
-
-
-def test_unrelated_duplicate_raw_is_dropped_not_fatal():
-    phyts = pd.DataFrame({"TIC": ["A"], "sector": [14], "label": ["ECLIPSE"]})
-    tglc = _tglc(["A", "B", "B"], [14, 14, 14])        # B duplicated but PhyTS never uses it
-    matched, _ = match_phyts_tglc(phyts, tglc)          # must NOT raise
-    assert list(matched["TIC"]) == ["A"]
+def test_tglc_gaia_not_in_phyts_is_ignored():
+    phyts = pd.DataFrame({"TIC": ["A"], "sector": [14], "phyts_gaia": [100], "label": ["ECLIPSE"]})
+    tglc = _tglc(["A", "B", "B"], [14, 14, 14]); tglc["GAIADR3"] = [100, 200, 200]
+    matched, _ = match_phyts_tglc(phyts, tglc)                           # B(200) unused, dropped
+    assert len(matched) == 1 and matched["GAIADR3"].iloc[0] == 100
 
 
 def test_changing_phyts_flux_does_not_change_arms():
-    tglc = _tglc(["A"], [14])
-    # the eval keeps only TIC/sector/label from PhyTS, so PhyTS flux can't enter
-    p1 = pd.DataFrame({"TIC": ["A"], "sector": [14], "label": ["ECLIPSE"]})
-    p2 = p1.copy()
-    m1, _ = match_phyts_tglc(p1, tglc)
-    m2, _ = match_phyts_tglc(p2, tglc)
-    assert np.array_equal(m1["aperture_flux"].iloc[0], m2["aperture_flux"].iloc[0])
-    assert "flux" not in m1.columns                    # only raw aperture_flux is carried
+    tglc = _tglc(["A"], [14]); tglc["GAIADR3"] = [100]
+    # the eval keeps only TIC/sector/label/GaiaID from PhyTS, so PhyTS flux can't enter
+    p = pd.DataFrame({"TIC": ["A"], "sector": [14], "phyts_gaia": [100], "label": ["ECLIPSE"]})
+    m, _ = match_phyts_tglc(p, tglc)
+    assert np.array_equal(m["aperture_flux"].iloc[0], tglc["aperture_flux"].iloc[0])
+    assert "flux" not in m.columns                     # only raw aperture_flux is carried
 
 
 def test_changing_raw_flux_changes_inputs():

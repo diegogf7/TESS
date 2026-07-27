@@ -58,25 +58,15 @@ def quality_filter(time, flux, tess, tglc):
     return time[good], flux[good]
 
 
-def match_phyts_tglc(phyts, tglc):
-    """Match each PhyTS row to exactly one raw TGLC row on (TIC, sector).
-    Hard-fail only if a PhyTS star hits a DUPLICATED (TIC, sector) in TGLC (an
-    ambiguous match); duplicated TGLC keys that no PhyTS row uses are dropped."""
-    dup = tglc.duplicated(["TIC", "sector"], keep=False)
-    if dup.any():
-        # A (TIC, sector) with >1 DISTINCT GaiaDR3 is genuinely ambiguous. The same
-        # star observed on two chips (identical GaiaDR3) is not -- keep the first.
-        nun = tglc[dup].groupby(["TIC", "sector"])["GAIADR3"].nunique()
-        conflict = set(nun[nun > 1].index)
-        if conflict:
-            keys = pd.MultiIndex.from_frame(phyts[["TIC", "sector"]])
-            hit = phyts[keys.isin(conflict)]
-            if len(hit):
-                raise RuntimeError(
-                    f"{len(hit)} PhyTS rows match a (TIC, sector) with CONFLICTING GaiaDR3 "
-                    f"-- ambiguous, aborting. TICs: {sorted(hit['TIC'].astype(str).unique())[:20]}")
-        tglc = tglc.drop_duplicates(["TIC", "sector"], keep="first")   # same-star/unrelated dups
-    merged = phyts.merge(tglc, on=["TIC", "sector"], how="left", indicator=True)
+def match_phyts_tglc(phyts, tglc, phyts_gaia="phyts_gaia"):
+    """Match each PhyTS row to its raw TGLC row by Gaia DR3 id + sector. TIC is
+    NOT a unique key -- one TESS TIC can blend several Gaia sources, so
+    (TIC, sector) is ambiguous; PhyTS's GaiaID pins the exact labelled star. The
+    same Gaia source on two chips (duplicate GAIADR3) is de-duplicated (first)."""
+    tglc = tglc.drop(columns=[c for c in ("TIC",) if c in tglc.columns])   # keep PhyTS TIC
+    tglc = tglc.drop_duplicates(["GAIADR3", "sector"], keep="first")
+    left = phyts.rename(columns={phyts_gaia: "GAIADR3"})
+    merged = left.merge(tglc, on=["GAIADR3", "sector"], how="left", indicator=True)
     matched = merged[merged["_merge"] == "both"].drop(columns="_merge").reset_index(drop=True)
     unmatched = merged[merged["_merge"] == "left_only"].drop(columns="_merge")
     return matched, unmatched
@@ -101,9 +91,9 @@ def main():
     phyts["TIC"] = phyts["TIC"].astype(str)
     gaia_col = next((c for c in ("GaiaID", "gaiaid", "GAIADR3", "GAIADR2", "gaia_id")
                      if c in phyts.columns), None)
-    phyts = phyts[["TIC", "sector", "label"] + ([gaia_col] if gaia_col else [])]
-    if gaia_col:
-        phyts = phyts.rename(columns={gaia_col: "phyts_gaia"})   # avoid clash with TGLC GAIADR3
+    if gaia_col is None:
+        raise RuntimeError("PhyTS has no Gaia id column -- cannot match TGLC by GaiaDR3")
+    phyts = phyts[["TIC", "sector", "label", gaia_col]].rename(columns={gaia_col: "phyts_gaia"})
     n_phyts = len(phyts)
     expected = sorted(phyts["label"].unique())
 
@@ -122,22 +112,6 @@ def main():
     if len(unmatched):
         print("  unmatched TICs (first 20):",
               unmatched["TIC"].head(20).tolist(), flush=True)
-
-    # GaiaID agreement where both sources have it
-    gaia_mismatch = 0
-    if gaia_col:
-        def _norm(x):
-            try:
-                return str(int(float(x)))
-            except (ValueError, TypeError):
-                return ""
-        both = matched["phyts_gaia"].notna() & matched["GAIADR3"].notna()
-        a = matched.loc[both, "phyts_gaia"].map(_norm)
-        b = matched.loc[both, "GAIADR3"].map(_norm)
-        gaia_mismatch = int(((a != b) & (a != "") & (b != "")).sum())
-        if gaia_mismatch:
-            print(f"WARNING: {gaia_mismatch} PhyTS/TGLC GaiaID mismatches on matched rows "
-                  f"(kept; likely DR2/DR3 or TIC-map differences) -- see summary", flush=True)
 
     tics = matched["TIC"].to_numpy().astype(str)
     sectors = matched["sector"].to_numpy()
@@ -223,7 +197,7 @@ def main():
         "tic_sector_sha256": ordered_hash_tic_sector(tics, sectors),
         "flux_column_used": "aperture_flux (raw TGLC)",
         "quality_mask": BAD_TESS_MASK, "tglc_flags_removed": "nonzero",
-        "gaia_id_mismatches": gaia_mismatch,
+        "matched_by": "GaiaDR3+sector (TIC is not unique -- blends)",
         "phys_ckpt": PHYS_CKPT, "inst_ckpt": INST_CKPT, "decoder_ckpt": DECODER_CKPT,
         "tglc_path": TGLC_PATH,
         "model_hashes_unchanged": True, "phyts_flux_used": False,
