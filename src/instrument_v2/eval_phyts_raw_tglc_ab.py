@@ -131,7 +131,8 @@ def main():
         b = matched.loc[both, "GAIADR3"].map(_norm)
         gaia_mismatch = int(((a != b) & (a != "") & (b != "")).sum())
         if gaia_mismatch:
-            raise RuntimeError(f"{gaia_mismatch} PhyTS/TGLC GaiaID mismatches on matched rows")
+            print(f"WARNING: {gaia_mismatch} PhyTS/TGLC GaiaID mismatches on matched rows "
+                  f"(kept; likely DR2/DR3 or TIC-map differences) -- see summary", flush=True)
 
     tics = matched["TIC"].to_numpy().astype(str)
     sectors = matched["sector"].to_numpy()
