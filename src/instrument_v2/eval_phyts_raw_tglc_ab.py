@@ -64,13 +64,18 @@ def match_phyts_tglc(phyts, tglc):
     ambiguous match); duplicated TGLC keys that no PhyTS row uses are dropped."""
     dup = tglc.duplicated(["TIC", "sector"], keep=False)
     if dup.any():
-        dup_keys = tglc.loc[dup, ["TIC", "sector"]].drop_duplicates()
-        hit = phyts.merge(dup_keys, on=["TIC", "sector"], how="inner")
-        if len(hit):
-            raise RuntimeError(
-                f"{len(hit)} PhyTS rows match a duplicated (TIC, sector) in raw TGLC "
-                f"-- ambiguous, aborting. TICs: {sorted(hit['TIC'].astype(str).unique())[:20]}")
-        tglc = tglc.drop_duplicates(["TIC", "sector"], keep="first")   # unrelated dups, safe to drop
+        # A (TIC, sector) with >1 DISTINCT GaiaDR3 is genuinely ambiguous. The same
+        # star observed on two chips (identical GaiaDR3) is not -- keep the first.
+        nun = tglc[dup].groupby(["TIC", "sector"])["GAIADR3"].nunique()
+        conflict = set(nun[nun > 1].index)
+        if conflict:
+            keys = pd.MultiIndex.from_frame(phyts[["TIC", "sector"]])
+            hit = phyts[keys.isin(conflict)]
+            if len(hit):
+                raise RuntimeError(
+                    f"{len(hit)} PhyTS rows match a (TIC, sector) with CONFLICTING GaiaDR3 "
+                    f"-- ambiguous, aborting. TICs: {sorted(hit['TIC'].astype(str).unique())[:20]}")
+        tglc = tglc.drop_duplicates(["TIC", "sector"], keep="first")   # same-star/unrelated dups
     merged = phyts.merge(tglc, on=["TIC", "sector"], how="left", indicator=True)
     matched = merged[merged["_merge"] == "both"].drop(columns="_merge").reset_index(drop=True)
     unmatched = merged[merged["_merge"] == "left_only"].drop(columns="_merge")

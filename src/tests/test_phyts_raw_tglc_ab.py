@@ -64,6 +64,14 @@ def test_duplicate_raw_match_hard_fails():
     assert raised
 
 
+def test_same_star_duplicate_kept_not_fatal():
+    phyts = pd.DataFrame({"TIC": ["A"], "sector": [14], "label": ["ECLIPSE"]})
+    tglc = _tglc(["A", "A"], [14, 14])
+    tglc["GAIADR3"] = [999, 999]                        # same star on two chips -> same GaiaDR3
+    matched, _ = match_phyts_tglc(phyts, tglc)          # must NOT raise
+    assert len(matched) == 1
+
+
 def test_unrelated_duplicate_raw_is_dropped_not_fatal():
     phyts = pd.DataFrame({"TIC": ["A"], "sector": [14], "label": ["ECLIPSE"]})
     tglc = _tglc(["A", "B", "B"], [14, 14, 14])        # B duplicated but PhyTS never uses it
