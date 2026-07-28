@@ -58,5 +58,12 @@ echo "  git commit    : $(git rev-parse HEAD 2>/dev/null || echo unknown)"
 echo "========================================================"
 nvidia-smi || true
 
+# fail fast if this node has no usable GPU (some ou_mki nodes hand out no device)
+"$PY" -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" || {
+  echo "FATAL: no CUDA device visible on $(hostname) -- aborting instead of training on CPU."
+  echo "       resubmit, and add --exclude=$(hostname -s) to skip this node."
+  exit 1
+}
+
 "$PY" -m src.instrument_v2.run_tglc_physics_jepa_ab $ARGS
 echo "=== DONE $STAGE ${ARM:-} seed $SEED ==="
