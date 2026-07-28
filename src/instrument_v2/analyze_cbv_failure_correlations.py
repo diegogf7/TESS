@@ -64,8 +64,9 @@ def derive_detector(area):
 
 
 def load_tmag_by_tic(tics):
-    """TIC -> Tmag via dense_v2 (TIC,GAIADR3,sector) joined to positions
-    (GAIADR3,sector,tessmag). Missing values stay NaN and are reported."""
+    """TIC -> Tmag. Tmag is a stellar property (sector-independent), so positions
+    is joined on GAIADR3 ONLY (matching on GAIADR3+sector would keep only each
+    star's discovery-sector row and drop ~everything). Missing stays NaN."""
     import pyarrow.parquet as pq
     want = tics.astype(str)
     tmag = pd.Series(np.nan, index=pd.Index(np.unique(want), name="TIC"), dtype=float)
@@ -75,12 +76,16 @@ def load_tmag_by_tic(tics):
             m = pd.read_parquet(S14_DATA, columns=["TIC", "tessmag"]).dropna()
             m["TIC"] = m["TIC"].astype(str)
             s = m.drop_duplicates("TIC").set_index("TIC")["tessmag"]
-            tmag.loc[tmag.index.intersection(s.index)] = s.reindex(tmag.index).dropna()
+            common = tmag.index.intersection(s.index)
+            tmag.loc[common] = s.reindex(common)
             return tmag.to_dict()
-        meta = pd.read_parquet(S14_DATA, columns=["TIC", "GAIADR3", "sector"])
+        meta = pd.read_parquet(S14_DATA, columns=["TIC", "GAIADR3"])
         meta["TIC"] = meta["TIC"].astype(str)
-        pos = pd.read_parquet(POSITIONS_PATH, columns=["GAIADR3", "sector", "tessmag"])
-        j = meta.merge(pos, on=["GAIADR3", "sector"], how="left").dropna(subset=["tessmag"])
+        meta["GAIADR3"] = meta["GAIADR3"].astype("int64").astype(str)
+        pos = pd.read_parquet(POSITIONS_PATH, columns=["GAIADR3", "tessmag"]).dropna(subset=["tessmag"])
+        pos["GAIADR3"] = pos["GAIADR3"].astype("int64").astype(str)
+        pos = pos.drop_duplicates("GAIADR3")                   # Tmag same across sectors
+        j = meta.merge(pos, on="GAIADR3", how="left").dropna(subset=["tessmag"])
         s = j.drop_duplicates("TIC").set_index("TIC")["tessmag"]
         common = tmag.index.intersection(s.index)
         tmag.loc[common] = s.reindex(common)
