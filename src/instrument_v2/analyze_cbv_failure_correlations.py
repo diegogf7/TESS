@@ -51,7 +51,11 @@ OUT_DIR = os.environ.get("OUT_DIR", os.path.join(GROUP_ART_DIR, "failure_correla
 EXPECTED_N = int(os.environ.get("EXPECTED_N", "10498"))
 PEARSON_COL = "decoder_vs_target_pearson"
 
-CONTINUOUS = ["Tmag", "target_rms", "raw_rms", "valid_frac", "n_groups"]
+# Tmag is unavailable for these stars (tglc_positions.parquet covers a different
+# field -- ~7% overlap), so brightness enters via log_flux = log10(median raw
+# aperture flux), a 100%-coverage SNR proxy computed from dense_v2 itself. Tmag is
+# still joined + reported where available, but is NOT a model feature.
+CONTINUOUS = ["log_flux", "target_rms", "raw_rms", "valid_frac", "n_groups"]
 CATEGORICAL = ["camera", "ccd", "subregion"]
 FEATURES = CONTINUOUS + CATEGORICAL
 
@@ -94,24 +98,32 @@ def load_tmag_by_tic(tics):
     return tmag.to_dict()
 
 
-def raw_rms_by_tic():
-    """TIC -> std of the median/MAD-normalized validation gridded curve on
-    observed cadences (individual-star variability amplitude). Reuses the exact
+def star_features_by_tic():
+    """TIC -> (raw_rms, log_flux). raw_rms = std of the median/MAD-normalized
+    validation gridded curve (per-star variability amplitude). log_flux =
+    log10(median raw aperture flux) as a brightness/SNR proxy. Reuses the exact
     validation dataset; no model, CPU only."""
     df = pd.read_parquet(S14_DATA)
     df = df[df["sector"] == 14].drop_duplicates("TIC").reset_index(drop=True)
     df = ensure_area_column(df)
+    flux_med = {}
+    for t, fl in zip(df["TIC"].astype(str), df["flux"]):
+        f = np.asarray(fl, dtype=np.float64)
+        m = np.nanmedian(f) if f.size else np.nan
+        flux_med[t] = float(np.log10(m)) if np.isfinite(m) and m > 0 else np.nan
     train_tics, val_tics, test_tics = ensure_splits(SPLIT_DIR, BASE_ART_DIR)
     t_range = ensure_time_range(BASE_ART_DIR, df, train_tics)
     val_ds = Sector14GroupStatDataset(df, val_tics, t_range, "area", GROUP_SIZE,
                                       min_valid=MIN_VALID_STARS)
     assert not (set(val_ds.tics) & test_tics), "test TIC leaked into validation"
-    out = {}
+    raw_rms, log_flux = {}, {}
     for i, tic in enumerate(val_ds.tics):
+        tic = str(tic)
         obs = val_ds.M[i] > 0
         x = val_ds.X[i][obs]
-        out[str(tic)] = float(x.std()) if x.size > 1 else np.nan
-    return out
+        raw_rms[tic] = float(x.std()) if x.size > 1 else np.nan
+        log_flux[tic] = flux_med.get(tic, np.nan)
+    return raw_rms, log_flux
 
 
 def build_features():
@@ -125,10 +137,11 @@ def build_features():
         "target_rms": pe["target_rms"].astype(float),
         "valid_frac": pe["valid_frac"].astype(float),
         "pearson": pe[PEARSON_COL].astype(float)})
-    rr = raw_rms_by_tic()
+    rr, lf = star_features_by_tic()
     feat["raw_rms"] = feat["tic"].map(rr).astype(float)
+    feat["log_flux"] = feat["tic"].map(lf).astype(float)          # brightness/SNR proxy
     tm = load_tmag_by_tic(feat["tic"].to_numpy())
-    feat["Tmag"] = feat["tic"].map(tm).astype(float)
+    feat["Tmag"] = feat["tic"].map(tm).astype(float)              # reported where available, not modeled
     feat["failed"] = (feat["pearson"] < 0).astype(int)
     return feat
 
@@ -186,7 +199,7 @@ def logistic_permutation_importance(feat, seed=0):
 
 
 def rank_causes(imp_df):
-    cat_of = {"Tmag": "brightness/SNR (Tmag)", "target_rms": "weak instrument signal (target RMS)",
+    cat_of = {"log_flux": "brightness/SNR (flux level)", "target_rms": "weak instrument signal (target RMS)",
               "raw_rms": "weak instrument signal (raw RMS)", "valid_frac": "coverage (valid fraction)",
               "n_groups": "data-scaling (CBV groups)", "camera": "detector position (camera)",
               "ccd": "detector position (CCD)", "subregion": "detector position (subregion)"}
@@ -195,7 +208,7 @@ def rank_causes(imp_df):
                "cause": cat_of.get(r.feature, r.feature)}
               for i, r in enumerate(imp_df.itertuples())]
     top = imp_df.iloc[0]["feature"]
-    headline = {"Tmag": "BRIGHTNESS/SNR effect: Tmag dominates after controlling for RMS and location.",
+    headline = {"log_flux": "BRIGHTNESS/SNR effect: flux level dominates after controlling for RMS and location.",
                 "target_rms": "WEAK INSTRUMENT SIGNAL: target RMS dominates.",
                 "raw_rms": "WEAK INSTRUMENT SIGNAL: raw-curve RMS dominates.",
                 "valid_frac": "COVERAGE effect: valid-cadence fraction dominates.",
@@ -236,6 +249,17 @@ def make_figures(feat, failure_rates, out_dir):
     ax.set_xlabel("Tmag"); ax.set_ylabel("decoder-vs-target Pearson")
     ax.set_title("Pearson vs Tmag (binned)"); ax.legend(fontsize=8)
     fig.tight_layout(); fig.savefig(os.path.join(out_dir, "pearson_vs_tmag.png"), dpi=130); plt.close(fig)
+
+    # 1b) Pearson vs brightness proxy (log median flux; 100% coverage, unlike Tmag)
+    bx, bmed, bq1, bq3 = _binned(feat["log_flux"], feat["pearson"])
+    fig, ax = plt.subplots(figsize=(7, 5))
+    if bx.size:
+        ax.fill_between(bx, bq1, bq3, alpha=0.25, color="tab:green", label="Q1-Q3")
+        ax.plot(bx, bmed, "-o", color="tab:green", ms=4, label="median")
+    ax.axhline(0.0, color="0.5", lw=0.8, ls="--")
+    ax.set_xlabel("log10(median raw flux)  [brightness proxy]"); ax.set_ylabel("decoder-vs-target Pearson")
+    ax.set_title("Pearson vs brightness (binned)"); ax.legend(fontsize=8)
+    fig.tight_layout(); fig.savefig(os.path.join(out_dir, "pearson_vs_brightness.png"), dpi=130); plt.close(fig)
 
     # 2) target RMS vs Tmag
     cx2, med2, q1b, q3b = _binned(feat["Tmag"], feat["target_rms"])
