@@ -47,43 +47,15 @@ def uncentered_area_basis(medians, valids, k):
 
     return vt[:k].T.astype(np.float64)
 
-def area_bases_cache_tag(k, group_size, min_valid, tics):
-
-    # rank (r), group size (g) and min-valid (mv) are all independent; every one
-    # is in the cache key so an old basis built under a different config can never
-    # be silently loaded. The train-TIC hash pins WHICH stars built the basis.
-    return (f"area_group_cbv_r{k}_g{group_size}_mv{min_valid}_q16437_tglc0_"
-            f"{train_tic_hash(tics)}")
-
-
-def area_bases_cache_path(cache_directive, k, group_size, min_valid, tics):
-
-    return os.path.join(
-        cache_directive, area_bases_cache_tag(k, group_size, min_valid, tics) + ".npz")
-
-
-def load_area_bases(npz_path):
-    """Load a cached area -> (L, k) basis dict from an explicit npz. A missing
-    file is a hard error -- callers must never silently rebuild or fall back."""
-
-    if not os.path.exists(npz_path):
-        raise RuntimeError(f"missing area-CBV basis file: {npz_path}")
-
-    data = np.load(npz_path, allow_pickle = True)
-    bases = {int(a): data[f"B_{int(a)}"] for a in data["areas"]}
-
-    for a, B in bases.items():
-        if B.ndim != 2:
-            raise RuntimeError(f"area {a} basis in {npz_path} is not 2-D: {B.shape}")
-
-    return bases
-
-
 def build_or_load_area_bases(X, M, areas, tics, k, cache_directive, group_size, min_valid):
 
     os.makedirs(cache_directive, exist_ok = True)
 
-    tag = area_bases_cache_tag(k, group_size, min_valid, tics)
+    # rank (r), group size (g) and min-valid (mv) are all independent; every one
+    # is in the cache key so an old basis built under a different config can never
+    # be silently loaded.
+    tag = (f"area_group_cbv_r{k}_g{group_size}_mv{min_valid}_q16437_tglc0_"
+           f"{train_tic_hash(tics)}")
 
     npz = os.path.join(cache_directive, tag + ".npz")
 

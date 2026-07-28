@@ -53,10 +53,7 @@ def test_arms_same_rows_and_order():
     raw_X, raw_M, cln_X, cln_M = build_arms(t, f, inst, dec, T0, T1)
     assert raw_X.shape == cln_X.shape == (3, GRID)
     rX2, _, cX2, _ = build_arms([t[1], t[0], t[2]], [f[1], f[0], f[2]], inst, dec, T0, T1)
-    assert np.allclose(raw_X[0], rX2[1])                     # raw path: bitwise row-aligned
-    # cleaned path passes through the instrument decode, whose batched kernels
-    # round differently by batch position on some BLAS builds (~4e-8)
-    assert np.allclose(cln_X[0], cX2[1], atol=1e-6)          # row-aligned across arms
+    assert np.allclose(raw_X[0], rX2[1]) and np.allclose(cln_X[0], cX2[1])   # row-aligned across arms
 
 
 # 2) raw and cleaned masks are identical
@@ -223,6 +220,51 @@ def test_stale_manifest_hard_fails():
     stale = dict(current); stale["inst_sig"] = "CHANGED"
     try:
         assert_manifest_matches(stale, current); raised = False
+    except RuntimeError:
+        raised = True
+    assert raised
+
+
+# 15) CLEAN_MODE=cbv: 8-weight decoder -> template = area_basis @ weights,
+#     matched masks, correct per-area basis; a missing basis hard-fails.
+def test_cbv_arm_uses_area_basis():
+    from src.instrument_v2.run_tglc_physics_jepa_ab import (
+        build_arms, batched_cbv_templates, grid_for_instrument, CBV_RANK,
+    )
+    torch.manual_seed(0)
+    inst = FixedTeacherInstrumentJEPA(n_tokens=16, token_dim=16, d_model=32, n_layers=1,
+                                      readout="mean", predictor_type="mlp").to(DEVICE).eval()
+    wdec = build_decoder(CBV_RANK).to(DEVICE).eval()          # decoder output [batch, 8]
+    for p in list(inst.parameters()) + list(wdec.parameters()):
+        p.requires_grad_(False)
+    rng = np.random.default_rng(1)
+    bases = {111: rng.normal(size=(GRID, CBV_RANK)).astype(np.float32),
+             232: rng.normal(size=(GRID, CBV_RANK)).astype(np.float32)}
+    curves = [_curve(0), _curve(1)]
+    times = [c[0] for c in curves]; fluxes = [c[1] for c in curves]
+    areas = np.array([111, 232])
+
+    # template array is [n, 1024] and equals area_basis @ 8-weights per curve
+    Xg = np.zeros((2, GRID), np.float32); Mg = np.zeros((2, GRID), np.float32)
+    for i in range(2):
+        Xg[i], Mg[i], _, _, _ = grid_for_instrument(times[i], fluxes[i], T0, T1)
+    tpl = batched_cbv_templates(inst, wdec, Xg, Mg, areas, bases)
+    assert tpl.shape == (2, GRID)                             # reconstructed template [batch, 1024]
+    with torch.no_grad():
+        w = wdec(inst.encode(torch.tensor(Xg, device=DEVICE),
+                             torch.tensor(Mg, device=DEVICE), view="predicted")).cpu().numpy()
+    for i, a in enumerate(areas):
+        assert np.allclose(tpl[i], bases[a] @ w[i], atol=1e-5)   # its own area's basis
+
+    # cbv arm: raw/cleaned masks identical; only flux differs
+    raw_X, raw_M, cln_X, cln_M = build_arms(times, fluxes, inst, wdec, T0, T1, areas, bases)
+    assert raw_X.shape == cln_X.shape == (2, GRID)
+    assert np.array_equal(raw_M, cln_M) and not np.allclose(raw_X, cln_X)
+
+    # a missing basis hard-fails -- never a silent raw fallback
+    try:
+        build_arms(times, fluxes, inst, wdec, T0, T1, np.array([111, 999]), bases)
+        raised = False
     except RuntimeError:
         raised = True
     assert raised

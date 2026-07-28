@@ -23,6 +23,7 @@ code with the fine-tuning experiment.
 """
 
 import argparse
+import glob
 import hashlib
 import json
 import os
@@ -57,8 +58,25 @@ EVAL_TGLC_PATH = os.environ.get(
     "EVAL_TGLC_PATH", "/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_phyts_s14.parquet")
 PHYS_CKPT_DIR = os.environ.get(
     "PHYS_CKPT_DIR", "/orcd/scratch/orcd/006/diegogon/checkpoints/tglc_physics_jepa_ab")
+# Where the RAW-arm checkpoint lives at evaluate time. Defaults to PHYS_CKPT_DIR;
+# a cbv run points it at the existing experiment so the raw JEPA is REUSED, never
+# retrained. The cleaned(=cbv) arm always comes from PHYS_CKPT_DIR.
+RAW_CKPT_DIR = os.environ.get("RAW_CKPT_DIR", PHYS_CKPT_DIR)
 OUT_DIR = os.environ.get("OUT_DIR", os.path.join("artifacts", "instrument_v2", "tglc_physics_jepa_ab"))
 PREP_DIR = os.path.join(OUT_DIR, "prepared")
+
+# ---- CBV-weight cleaning (CLEAN_MODE=cbv only) -------------------------------
+# direct (default): existing 1024-output decoder, unchanged behaviour.
+# cbv: build_decoder(8) predicts 8 weights; template = area_basis @ weights.
+# Everything after the template is identical (subtract_native + one resample).
+CLEAN_MODE = os.environ.get("CLEAN_MODE", "direct")
+assert CLEAN_MODE in ("direct", "cbv"), CLEAN_MODE
+GROUP_ART_DIR = os.environ.get(
+    "GROUP_ART_DIR", os.path.join("artifacts", "instrument_v2", "custom_group32_cbv8_mlp_qclean_v1"))
+WEIGHT_DECODER_CKPT = os.environ.get(
+    "WEIGHT_DECODER_CKPT", os.path.join(GROUP_ART_DIR, "single_star_weight_decode", "decoder.pth"))
+CBV_BASES_NPZ = os.environ.get("CBV_BASES_NPZ", "")     # explicit path; else unique glob below
+CBV_RANK = 8
 
 EXPECTED_TIC_SECTOR_SHA = "6a1796a05d4313479a39cf8fdf5e8b273544558c28692fdbba9df63dc8f425cc"
 EXPECTED_N_EVAL = 2409
@@ -163,10 +181,36 @@ def batched_decode(inst, decoder, Xg, Mg, batch=512):
     return decoded
 
 
-def build_arms(times, fluxes, inst, decoder, t0, t1):
+def batched_cbv_templates(inst, wdecoder, Xg, Mg, areas, bases, batch=512):
+    """CLEAN_MODE=cbv: frozen instrument JEPA -> 8 weights -> template =
+    area_basis @ weights, per curve. Returns the SAME (n, 1024) template array
+    batched_decode would, so the rest of build_arms is unchanged. A missing area
+    basis HARD-FAILS -- never a silent raw fallback."""
+    B = np.zeros((len(Xg), GRID, CBV_RANK), np.float32)
+    for i, a in enumerate(areas):
+        if int(a) not in bases:
+            raise RuntimeError(f"no CBV basis for area {int(a)} -- refusing to fall back to raw")
+        B[i] = bases[int(a)]
+    templates = np.zeros_like(Xg)
+    with torch.no_grad():
+        for s in range(0, len(Xg), batch):
+            f = torch.tensor(Xg[s:s + batch], dtype=torch.float32, device=DEVICE)
+            m = torch.tensor(Mg[s:s + batch], dtype=torch.float32, device=DEVICE)
+            w = wdecoder(inst.encode(f, m, view="predicted"))          # (b, 8)
+            bb = torch.tensor(B[s:s + batch], dtype=torch.float32, device=DEVICE)
+            templates[s:s + batch] = torch.einsum("bk,blk->bl", w, bb).detach().cpu().numpy()
+    return templates
+
+
+def build_arms(times, fluxes, inst, decoder, t0, t1, areas=None, bases=None):
     """From filtered native (time, flux) lists build matched raw and cleaned
     physics inputs. Decode once (batched), then subtract on native timestamps and
-    run the physics preprocessing exactly once per arm."""
+    run the physics preprocessing exactly once per arm.
+
+    bases is None (direct): `decoder` is the 1024-output instrument decoder.
+    bases given (cbv): `decoder` is build_decoder(8); the template is
+    area_basis @ 8-weights. Only the template SOURCE differs -- subtraction,
+    scaling, native interpolation and the single physics resample are identical."""
     n = len(times)
     grid_times = _grid_times(t0, t1)
     Xg = np.zeros((n, GRID), np.float32); Mg = np.zeros((n, GRID), np.float32)
@@ -174,7 +218,10 @@ def build_arms(times, fluxes, inst, decoder, t0, t1):
     for i in range(n):
         Xg[i], Mg[i], med[i], scale[i], v = grid_for_instrument(times[i], fluxes[i], t0, t1)
         valids.append(v)
-    decoded = batched_decode(inst, decoder, Xg, Mg)
+    if bases is not None:
+        decoded = batched_cbv_templates(inst, decoder, Xg, Mg, areas, bases)
+    else:
+        decoded = batched_decode(inst, decoder, Xg, Mg)
 
     raw_X = np.zeros((n, GRID), np.float32); raw_M = np.zeros((n, GRID), np.float32)
     cln_X = np.zeros((n, GRID), np.float32); cln_M = np.zeros((n, GRID), np.float32)
@@ -208,10 +255,50 @@ def remove_eval_cohort(df, excl):
 def _load_curves(path):
     cols = set(pq.read_schema(path).names)
     flux_col = "aperture_flux" if "aperture_flux" in cols else "flux"
-    df = pd.read_parquet(path, columns=["TIC", "sector", "GAIADR3", "time", flux_col,
-                                        "TESS_flags", "TGLC_flags"])
+    want = ["TIC", "sector", "GAIADR3", "time", flux_col, "TESS_flags", "TGLC_flags"]
+    want += [c for c in ("area", "camera", "ccd", "ra", "dec") if c in cols]  # cbv: area lookup
+    df = pd.read_parquet(path, columns=want)
     df["TIC"] = df["TIC"].astype(str)
     return df.rename(columns={flux_col: "flux_raw"})
+
+
+def _resolve_bases_npz():
+    """The one cached train-TIC area-basis npz (the existing K=8 bases; never
+    rebuilt here). Absence or ambiguity hard-fails."""
+    if CBV_BASES_NPZ:
+        if not os.path.exists(CBV_BASES_NPZ):
+            raise RuntimeError(f"CBV_BASES_NPZ does not exist: {CBV_BASES_NPZ}")
+        return CBV_BASES_NPZ
+    hits = sorted(glob.glob(os.path.join(
+        GROUP_ART_DIR, f"area_group_cbv_r{CBV_RANK}_g32_mv16_q16437_tglc0_*.npz")))
+    if len(hits) != 1:
+        raise RuntimeError(f"need exactly one basis npz in {GROUP_ART_DIR}, found "
+                           f"{len(hits)} -- set CBV_BASES_NPZ explicitly")
+    return hits[0]
+
+
+def _load_bases(npz_path):
+    d = np.load(npz_path, allow_pickle=True)
+    bases = {int(a): d[f"B_{int(a)}"].astype(np.float32) for a in d["areas"]}
+    for a, B in bases.items():
+        if B.shape != (GRID, CBV_RANK):
+            raise RuntimeError(f"area {a} basis shape {B.shape} != ({GRID}, {CBV_RANK})")
+    return bases
+
+
+def _areas_for(df):
+    """Per-row area for the CBV basis. Uses the existing `area` column, else the
+    existing add_area(camera,ccd,ra,dec) assignment. Invalid areas hard-fail."""
+    if "area" in df.columns and df["area"].notna().all():
+        a = df["area"].astype(int).to_numpy()
+    elif {"camera", "ccd", "ra", "dec"} <= set(df.columns):
+        from src.regions.areas import add_area
+        a = add_area(df.copy())["area"].astype(int).to_numpy()
+    else:
+        raise RuntimeError("no `area` column nor camera/ccd/ra/dec -- cannot assign CBV basis")
+    if (a == -1).any():
+        raise RuntimeError(f"{int((a == -1).sum())} rows have area -1 -- cannot clean without a basis")
+    return a
 
 
 def _filter_curves(df, min_good):
@@ -238,6 +325,11 @@ def stage_prepare(seed):
         saved = json.load(open(manifest_path))
         try:
             assert_manifest_matches(saved, current_config())
+            if CLEAN_MODE == "cbv" and (               # cbv artifacts not in CONFIG_KEYS
+                    saved.get("clean_mode") != "cbv"
+                    or saved.get("weight_decoder_sig") != _file_sig(WEIGHT_DECODER_CKPT)
+                    or saved.get("bases_sig") != _file_sig(_resolve_bases_npz())):
+                raise RuntimeError("cbv weight-decoder or bases changed")
             print("prepared data already valid; ensuring per-seed init only", flush=True)
             _ensure_init(seed)
             return
@@ -282,8 +374,18 @@ def stage_prepare(seed):
                        torch.load(INST_CKPT, map_location=DEVICE)).eval()
     for p in inst.parameters():
         p.requires_grad_(False)
-    decoder = strict_load(build_decoder(1024).to(DEVICE),
-                          torch.load(DECODER_CKPT, map_location=DEVICE)).eval()
+    # direct: 1024-output decoder. cbv: build_decoder(8) + fixed area bases.
+    if CLEAN_MODE == "cbv":
+        decoder = strict_load(build_decoder(CBV_RANK).to(DEVICE),
+                              torch.load(WEIGHT_DECODER_CKPT, map_location=DEVICE)).eval()
+        bases = _load_bases(_resolve_bases_npz())
+        pre_areas = _areas_for(pre)
+        print(f"CBV cleaning: {CBV_RANK} weights x {len(bases)} area bases "
+              f"({_resolve_bases_npz()})", flush=True)
+    else:
+        decoder = strict_load(build_decoder(1024).to(DEVICE),
+                              torch.load(DECODER_CKPT, map_location=DEVICE)).eval()
+        bases = pre_areas = None
     for p in decoder.parameters():
         p.requires_grad_(False)
     inst_before = (state_hash(inst.teacher), state_hash(inst.student),
@@ -291,12 +393,15 @@ def stage_prepare(seed):
 
     # --- build matched arms (pretrain + eval) --------------------------------
     print("building pretraining arms...", flush=True)
-    pre_raw_X, pre_raw_M, pre_cln_X, pre_cln_M = build_arms(pre_times, pre_fluxes, inst, decoder, t0, t1)
+    pre_raw_X, pre_raw_M, pre_cln_X, pre_cln_M = build_arms(
+        pre_times, pre_fluxes, inst, decoder, t0, t1, pre_areas, bases)
     eval_times, eval_fluxes, matched2 = _filter_curves(matched, min_good=1)
     if len(matched2) != EXPECTED_N_EVAL:
         raise RuntimeError("an eval curve was dropped by the min-good filter")
+    eval_areas = _areas_for(matched2) if CLEAN_MODE == "cbv" else None
     print("building evaluation arms...", flush=True)
-    ev_raw_X, ev_raw_M, ev_cln_X, ev_cln_M = build_arms(eval_times, eval_fluxes, inst, decoder, t0, t1)
+    ev_raw_X, ev_raw_M, ev_cln_X, ev_cln_M = build_arms(
+        eval_times, eval_fluxes, inst, decoder, t0, t1, eval_areas, bases)
 
     inst_after = (state_hash(inst.teacher), state_hash(inst.student),
                   state_hash(inst.predictor), state_hash(decoder))
@@ -332,6 +437,11 @@ def stage_prepare(seed):
                 "eval_tic_sector_sha256": ordered_hash_tic_sector(eval_tics, eval_sectors),
                 "exclusion_hash": exclusion_hash,
                 "instrument_decoder_unchanged": True,
+                "clean_mode": CLEAN_MODE,
+                "weight_decoder_sig": (_file_sig(WEIGHT_DECODER_CKPT) if CLEAN_MODE == "cbv" else None),
+                "weight_decoder_ckpt": (WEIGHT_DECODER_CKPT if CLEAN_MODE == "cbv" else None),
+                "bases_sig": (_file_sig(_resolve_bases_npz()) if CLEAN_MODE == "cbv" else None),
+                "bases_npz": (_resolve_bases_npz() if CLEAN_MODE == "cbv" else None),
                 "quality_filter": {"bad_tess_mask": int(BAD_TESS_MASK), "tglc_flags": "== 0",
                                    "finite": True, "min_good_pretrain": MIN_GOOD}}
     with open(manifest_path, "w") as fh:
@@ -363,14 +473,19 @@ def _require_valid_prepared():
 
 
 # ---- stage: train -----------------------------------------------------------
-def train_arm_from_arrays(arm, seed, X, M, train_idx, val_idx, init_path, ckpt_dir):
-    """One physics-JEPA pretraining run. EVERY arm (raw / cleaned / cbv) goes
-    through this exact function so init, seed, batch order, segment-mask seeds,
-    architecture, optimizer, epochs and checkpoint selection cannot diverge."""
+def stage_train(arm, seed):
+    assert arm in ("raw", "cleaned")
+    manifest = _require_valid_prepared()
+    meta = np.load(os.path.join(PREP_DIR, "pretrain_meta.npz"))
+    train_idx, val_idx = meta["train_idx"], meta["val_idx"]
+    X = torch.from_numpy(np.load(os.path.join(PREP_DIR, f"pretrain_{arm}_X.npy")))
+    M = torch.from_numpy(np.load(os.path.join(PREP_DIR, f"pretrain_{arm}_M.npy")))
+
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     model = build_latent_jepa().to(DEVICE)
+    init_path = os.path.join(PHYS_CKPT_DIR, f"physics_jepa_init_s{seed}.pth")
     if not os.path.exists(init_path):
         raise RuntimeError(f"missing {init_path}; run --stage prepare SEED={seed}")
     model.load_state_dict(torch.load(init_path, map_location=DEVICE), strict=True)  # identical start
@@ -379,7 +494,7 @@ def train_arm_from_arrays(arm, seed, X, M, train_idx, val_idx, init_path, ckpt_d
     optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=LR)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
     perm_rng = np.random.default_rng(seed)                 # batch order: identical across arms
-    ckpt_path = os.path.join(ckpt_dir, f"physics_jepa_{arm}_s{seed}_best.pth")
+    ckpt_path = os.path.join(PHYS_CKPT_DIR, f"physics_jepa_{arm}_s{seed}_best.pth")
     best_val, best_epoch, best_std = float("inf"), -1, 0.0
 
     for epoch in range(EPOCHS):
@@ -424,20 +539,9 @@ def train_arm_from_arrays(arm, seed, X, M, train_idx, val_idx, init_path, ckpt_d
                            "readout": os.environ.get("JEPA_READOUT", "mean"),
                            "predictor": os.environ.get("JEPA_PREDICTOR", "transformer"),
                            "mask_ratio": os.environ.get("JEPA_MASK_RATIO", "0.5")}}
-    with open(os.path.join(ckpt_dir, f"physics_jepa_{arm}_s{seed}_meta.json"), "w") as fh:
+    with open(os.path.join(PHYS_CKPT_DIR, f"physics_jepa_{arm}_s{seed}_meta.json"), "w") as fh:
         json.dump(meta_out, fh, indent=2)
     print(f"[{arm} s{seed}] best val {best_val:.5f} @epoch {best_epoch} -> {ckpt_path}", flush=True)
-
-
-def stage_train(arm, seed):
-    assert arm in ("raw", "cleaned")
-    _require_valid_prepared()
-    meta = np.load(os.path.join(PREP_DIR, "pretrain_meta.npz"))
-    X = torch.from_numpy(np.load(os.path.join(PREP_DIR, f"pretrain_{arm}_X.npy")))
-    M = torch.from_numpy(np.load(os.path.join(PREP_DIR, f"pretrain_{arm}_M.npy")))
-    init_path = os.path.join(PHYS_CKPT_DIR, f"physics_jepa_init_s{seed}.pth")
-    train_arm_from_arrays(arm, seed, X, M, meta["train_idx"], meta["val_idx"],
-                          init_path, PHYS_CKPT_DIR)
 
 
 # ---- stage: evaluate --------------------------------------------------------
@@ -468,7 +572,8 @@ def stage_evaluate(seed):
 
     jepas, metas = {}, {}
     for arm in ("raw", "cleaned"):
-        ck = os.path.join(PHYS_CKPT_DIR, f"physics_jepa_{arm}_s{seed}_best.pth")
+        ckpt_dir = RAW_CKPT_DIR if arm == "raw" else PHYS_CKPT_DIR   # raw reused; cleaned=cbv here
+        ck = os.path.join(ckpt_dir, f"physics_jepa_{arm}_s{seed}_best.pth")
         if not os.path.exists(ck):
             raise RuntimeError(f"missing checkpoint {ck}; train the {arm} arm first")
         m = build_latent_jepa().to(DEVICE)
@@ -477,7 +582,7 @@ def stage_evaluate(seed):
         for p in m.parameters():
             p.requires_grad_(False)
         jepas[arm] = m
-        mp = os.path.join(PHYS_CKPT_DIR, f"physics_jepa_{arm}_s{seed}_meta.json")
+        mp = os.path.join(ckpt_dir, f"physics_jepa_{arm}_s{seed}_meta.json")
         metas[arm] = json.load(open(mp)) if os.path.exists(mp) else {}
     started_identical = (metas.get("raw", {}).get("init_hash") == metas.get("cleaned", {}).get("init_hash")
                          and metas.get("raw", {}).get("init_hash") is not None)
@@ -514,11 +619,14 @@ def stage_evaluate(seed):
         "n_eval": int(len(tics)), "n_eval_train": int(len(tr)), "n_eval_test": int(len(te)),
         "classes": [CLASSES[c] for c in present],
         "seed": seed,
-        "raw_ckpt": os.path.join(PHYS_CKPT_DIR, f"physics_jepa_raw_s{seed}_best.pth"),
+        "clean_mode": manifest.get("clean_mode", CLEAN_MODE),
+        "raw_ckpt": os.path.join(RAW_CKPT_DIR, f"physics_jepa_raw_s{seed}_best.pth"),
         "cleaned_ckpt": os.path.join(PHYS_CKPT_DIR, f"physics_jepa_cleaned_s{seed}_best.pth"),
         "pretrain_val_loss": {a: metas[a].get("val_loss") for a in ("raw", "cleaned")},
         "paths": {"pretrain": PRETRAIN_PATH, "eval_tglc": EVAL_TGLC_PATH, "phyts": PHYTS_PATH,
-                  "inst_ckpt": INST_CKPT, "decoder_ckpt": DECODER_CKPT, "grid_range": GRID_RANGE},
+                  "inst_ckpt": INST_CKPT, "decoder_ckpt": DECODER_CKPT, "grid_range": GRID_RANGE,
+                  "weight_decoder_ckpt": manifest.get("weight_decoder_ckpt"),
+                  "bases_npz": manifest.get("bases_npz")},
         "eval_tic_sector_sha256": ordered_hash_tic_sector(tics, sectors),
         "eval_split_sha256": _ordered_hash(np.concatenate([tr, te])),
         "exclusion_hash": manifest["exclusion_hash"],
@@ -546,6 +654,10 @@ def main():
     args = ap.parse_args()
     os.makedirs(OUT_DIR, exist_ok=True)
     os.makedirs(PHYS_CKPT_DIR, exist_ok=True)
+    print(f"CLEAN_MODE={CLEAN_MODE} OUT_DIR={OUT_DIR} PHYS_CKPT_DIR={PHYS_CKPT_DIR} "
+          f"RAW_CKPT_DIR={RAW_CKPT_DIR}", flush=True)
+    if CLEAN_MODE == "cbv":
+        print(f"  WEIGHT_DECODER_CKPT={WEIGHT_DECODER_CKPT}", flush=True)
 
     if args.stage == "prepare":
         stage_prepare(args.seed)
