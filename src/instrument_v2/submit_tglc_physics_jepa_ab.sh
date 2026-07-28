@@ -33,13 +33,15 @@ DECODER_CKPT=${DECODER_CKPT:-artifacts/instrument_v2/custom_group32_cbv8_mlp_qcl
 GRID_RANGE=${GRID_RANGE:-artifacts/instrument_v2/sector14_jepa_dense_v2/grid_range.json}
 export PRETRAIN_PATH EVAL_TGLC_PATH INST_CKPT DECODER_CKPT GRID_RANGE
 
-ARM=""
+ARM="${ARM:-}"                              # honor an exported ARM (raw|cleaned|cbv); do NOT wipe it
 ARGS="--stage $STAGE --seed $SEED"
 if [ "$STAGE" = "train" ]; then
-  ARM=${ARM:-${SLURM_ARRAY_TASK_ID:-}}
-  case "${SLURM_ARRAY_TASK_ID:-none}" in
-    0) ARM=raw ;; 1) ARM=cleaned ;; *) ARM=${ARM:-raw} ;;
+  case "${SLURM_ARRAY_TASK_ID:-none}" in    # an array task still maps 0=raw 1=cleaned
+    0) ARM=raw ;; 1) ARM=cleaned ;;
   esac
+  if [ -z "$ARM" ]; then                     # never silently default to raw -- it would overwrite the raw ckpt
+    echo "FATAL: train stage needs ARM=raw|cleaned|cbv (or array task 0/1)" >&2; exit 1
+  fi
   ARGS="$ARGS --arm $ARM"
 fi
 
