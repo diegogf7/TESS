@@ -44,6 +44,11 @@ TGLC_PATH = os.environ.get(
 OUT_DIR = os.environ.get(
     "OUT_DIR", os.path.join("artifacts", "instrument_v2", "phyts_raw_tglc_ab"))
 
+# direct (default): 1024-output decoder. cbv: build_decoder(8) + fixed area bases,
+# template = area_basis @ 8-weights. Everything after the template is identical.
+CLEAN_MODE = os.environ.get("CLEAN_MODE", "direct")
+assert CLEAN_MODE in ("direct", "cbv"), CLEAN_MODE
+
 
 def quality_filter(time, flux, tess, tglc):
     """The SAME central qclean rule as sector14_dataset.grid_frame: keep finite
@@ -100,9 +105,9 @@ def main():
     # --- raw TGLC (aperture_flux); match on (TIC, sector) --------------------
     tglc_cols = set(pq.read_schema(TGLC_PATH).names)
     flux_col = "aperture_flux" if "aperture_flux" in tglc_cols else "flux"  # dense_v2 stores raw as 'flux'
-    tglc = pd.read_parquet(TGLC_PATH,
-                           columns=["TIC", "sector", "GAIADR3", "time", flux_col,
-                                    "TESS_flags", "TGLC_flags"])
+    tglc_want = ["TIC", "sector", "GAIADR3", "time", flux_col, "TESS_flags", "TGLC_flags"]
+    tglc_want += [c for c in ("area", "camera", "ccd", "ra", "dec") if c in tglc_cols]  # cbv area
+    tglc = pd.read_parquet(TGLC_PATH, columns=tglc_want)
     tglc["TIC"] = tglc["TIC"].astype(str)
     tglc = tglc.rename(columns={flux_col: "aperture_flux"})
     matched, unmatched = match_phyts_tglc(phyts, tglc)
@@ -130,8 +135,20 @@ def main():
                                       readout="mean", predictor_type="mlp").to(DEVICE)
     inst.load_state_dict(torch.load(INST_CKPT, map_location=DEVICE))
     _freeze(inst)
-    decoder = _freeze(build_decoder(1024).to(DEVICE))
-    decoder.load_state_dict(torch.load(DECODER_CKPT, map_location=DEVICE))
+    if CLEAN_MODE == "cbv":                               # 8-weight decoder + fixed area bases
+        from src.instrument_v2.run_tglc_physics_jepa_ab import (   # lazy: avoid import cycle
+            WEIGHT_DECODER_CKPT, CBV_RANK, _resolve_bases_npz, _load_bases, _areas_for,
+        )
+        decoder = _freeze(build_decoder(CBV_RANK).to(DEVICE))
+        decoder.load_state_dict(torch.load(WEIGHT_DECODER_CKPT, map_location=DEVICE))
+        bases = _load_bases(_resolve_bases_npz())
+        areas = _areas_for(matched)
+        print(f"CBV cleaning: {CBV_RANK} weights x {len(bases)} area bases "
+              f"({_resolve_bases_npz()})", flush=True)
+    else:
+        decoder = _freeze(build_decoder(1024).to(DEVICE))
+        decoder.load_state_dict(torch.load(DECODER_CKPT, map_location=DEVICE))
+        bases = areas = None
     _freeze(decoder)
     hashes = {"phys": state_hash(phys), "inst_teacher": state_hash(inst.teacher),
               "inst_student": state_hash(inst.student),
@@ -144,7 +161,8 @@ def main():
         ft, ff = quality_filter(matched["time"].iloc[i], matched["aperture_flux"].iloc[i],
                                 matched["TESS_flags"].iloc[i], matched["TGLC_flags"].iloc[i])
         A_X[i], A_M[i] = physics_grid(ft, ff)
-        ct, cf = instrument_cleaned_curve(ft, ff, inst, decoder, t0, t1)   # no scale fit
+        basis = bases[int(areas[i])] if CLEAN_MODE == "cbv" else None    # this curve's area basis
+        ct, cf = instrument_cleaned_curve(ft, ff, inst, decoder, t0, t1, basis)   # no scale fit
         B_X[i], B_M[i] = physics_grid(ct, cf)
         if i % 200 == 0:
             print(f"  building arms {i}/{n_matched}", flush=True)
@@ -198,7 +216,10 @@ def main():
         "flux_column_used": "aperture_flux (raw TGLC)",
         "quality_mask": BAD_TESS_MASK, "tglc_flags_removed": "nonzero",
         "matched_by": "GaiaDR3+sector (TIC is not unique -- blends)",
-        "phys_ckpt": PHYS_CKPT, "inst_ckpt": INST_CKPT, "decoder_ckpt": DECODER_CKPT,
+        "phys_ckpt": PHYS_CKPT, "inst_ckpt": INST_CKPT,
+        "clean_mode": CLEAN_MODE,
+        "decoder_ckpt": (WEIGHT_DECODER_CKPT if CLEAN_MODE == "cbv" else DECODER_CKPT),
+        "cbv_bases_npz": (_resolve_bases_npz() if CLEAN_MODE == "cbv" else None),
         "tglc_path": TGLC_PATH,
         "model_hashes_unchanged": True, "phyts_flux_used": False,
     }

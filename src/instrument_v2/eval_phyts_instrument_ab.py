@@ -68,10 +68,14 @@ def physics_grid(time, flux):
     return resample_to_grid(np.asarray(time, dtype=np.float64), nf, GRID)
 
 
-def instrument_cleaned_curve(time, flux, model_inst, decoder, t0, t1):
+def instrument_cleaned_curve(time, flux, model_inst, decoder, t0, t1, basis=None):
     """Instrument-clean a curve: median/MAD-normalize good cadences onto the S14
     shared grid, decode the instrument template, subtract it (NO scale fit), and
-    return the cleaned curve in flux units at its observed grid times."""
+    return the cleaned curve in flux units at its observed grid times.
+
+    basis is None (direct): `decoder` is the 1024-output decoder; template =
+    decoder(z). basis given (cbv): `decoder` is build_decoder(8); template =
+    basis @ 8-weights. Everything after the template is identical."""
     time = np.asarray(time, dtype=np.float64)
     flux = np.asarray(flux, dtype=np.float64)
     good = np.isfinite(time) & np.isfinite(flux)          # finite only; no TESS/TGLC flags
@@ -86,7 +90,8 @@ def instrument_cleaned_curve(time, flux, model_inst, decoder, t0, t1):
         z = model_inst.encode(
             torch.tensor(X, dtype=torch.float32, device=DEVICE)[None],
             torch.tensor(M, dtype=torch.float32, device=DEVICE)[None], view="predicted")
-        decoded = decoder(z).squeeze(0).detach().cpu().numpy()      # (1024,)
+        out = decoder(z).squeeze(0).detach().cpu().numpy()          # (1024,) direct or (8,) cbv
+    decoded = out if basis is None else (np.asarray(basis) @ out)   # cbv: (1024,8)@(8,) = (1024,)
     cleaned_norm = X - decoded                            # subtract decoded instrument (no fit)
     cleaned_flux = cleaned_norm * scale + med             # back to flux units (orig median/scale)
     grid_times = t0 + (np.arange(GRID) + 0.5) / GRID * (t1 - t0)
