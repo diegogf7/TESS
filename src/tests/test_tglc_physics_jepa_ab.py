@@ -11,7 +11,7 @@ import torch
 
 from src.instrument_v2.run_tglc_physics_jepa_ab import (
     build_arms, subtract_native, grid_for_instrument, remove_eval_cohort,
-    assert_manifest_matches, strict_load, _classify, _grid_times,
+    assert_no_eval_overlap, assert_manifest_matches, strict_load, _classify, _grid_times,
 )
 from src.instrument_v2.finetune_phyts_raw_tglc_ab import cleaned_native_flux
 from src.instrument_v2.eval_phyts_instrument_ab import physics_grid, DEVICE, GRID
@@ -69,11 +69,11 @@ def test_raw_cleaned_masks_identical():
 def test_eval_cohort_excluded():
     pre = pd.DataFrame({"GAIADR3": [1, 2, 3, 4], "sector": [14, 14, 14, 14]})
     excl = {(2, 14), (4, 14)}
-    kept = remove_eval_cohort(pre, excl)
+    kept = remove_eval_cohort(pre, excl)                        # removes the eval stars
     assert set(zip(kept["GAIADR3"], kept["sector"])) == {(1, 14), (3, 14)}
-    pre_bad = pd.DataFrame({"GAIADR3": [2], "sector": [14]})    # overlap must hard-fail
+    assert_no_eval_overlap(kept, excl)                          # post-condition holds after removal
     try:
-        remove_eval_cohort(pre_bad, excl); raised = False
+        assert_no_eval_overlap(pre, excl); raised = False      # unfiltered df still has eval stars -> hard-fail
     except RuntimeError:
         raised = True
     assert raised

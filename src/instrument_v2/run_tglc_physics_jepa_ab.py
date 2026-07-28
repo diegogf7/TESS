@@ -189,14 +189,19 @@ def build_arms(times, fluxes, inst, decoder, t0, t1):
     return raw_X, raw_M, cln_X, cln_M
 
 
+def assert_no_eval_overlap(df, excl):
+    """Hard-fail if ANY (GaiaDR3, sector) in df is a labeled eval-cohort star."""
+    overlap = set(zip(df["GAIADR3"].tolist(), df["sector"].tolist())) & set(excl)
+    if overlap:
+        raise RuntimeError(f"{len(overlap)} eval GaiaDR3+sector present in pretraining -- exclusion failed")
+
+
 def remove_eval_cohort(df, excl):
     """Drop pretraining rows whose (GaiaDR3, sector) is a labeled eval-cohort
-    star; hard-fail if any remain (evaluation stars must never pretrain)."""
+    star, then assert none remain (evaluation stars must never pretrain)."""
     key = list(zip(df["GAIADR3"].tolist(), df["sector"].tolist()))
     kept = df[np.array([k not in excl for k in key], dtype=bool)].reset_index(drop=True)
-    still = set(zip(kept["GAIADR3"].tolist(), kept["sector"].tolist())) & set(excl)
-    if still:
-        raise RuntimeError(f"{len(still)} eval GaiaDR3+sector remain in pretraining -- exclusion failed")
+    assert_no_eval_overlap(kept, excl)
     return kept
 
 
