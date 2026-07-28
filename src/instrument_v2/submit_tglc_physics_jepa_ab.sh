@@ -67,5 +67,11 @@ nvidia-smi || true
   exit 1
 }
 
+# The arm is passed on the command line ($ARGS has --arm). Clear the ARM env var
+# so it can't leak into unrelated modules -- src/instrument_v2/train_sector14_jepa
+# reads os.environ["ARM"] for its GRID arm and asserts it is "shared"/"legacy",
+# so an exported ARM=cbv would crash that import.
+DONE_ARM="${ARM:-}"
+unset ARM
 "$PY" -m src.instrument_v2.run_tglc_physics_jepa_ab $ARGS
-echo "=== DONE $STAGE ${ARM:-} seed $SEED ==="
+echo "=== DONE $STAGE ${DONE_ARM:-} seed $SEED ==="
