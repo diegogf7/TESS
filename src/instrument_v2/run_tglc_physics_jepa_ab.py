@@ -363,19 +363,14 @@ def _require_valid_prepared():
 
 
 # ---- stage: train -----------------------------------------------------------
-def stage_train(arm, seed):
-    assert arm in ("raw", "cleaned")
-    manifest = _require_valid_prepared()
-    meta = np.load(os.path.join(PREP_DIR, "pretrain_meta.npz"))
-    train_idx, val_idx = meta["train_idx"], meta["val_idx"]
-    X = torch.from_numpy(np.load(os.path.join(PREP_DIR, f"pretrain_{arm}_X.npy")))
-    M = torch.from_numpy(np.load(os.path.join(PREP_DIR, f"pretrain_{arm}_M.npy")))
-
+def train_arm_from_arrays(arm, seed, X, M, train_idx, val_idx, init_path, ckpt_dir):
+    """One physics-JEPA pretraining run. EVERY arm (raw / cleaned / cbv) goes
+    through this exact function so init, seed, batch order, segment-mask seeds,
+    architecture, optimizer, epochs and checkpoint selection cannot diverge."""
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
     model = build_latent_jepa().to(DEVICE)
-    init_path = os.path.join(PHYS_CKPT_DIR, f"physics_jepa_init_s{seed}.pth")
     if not os.path.exists(init_path):
         raise RuntimeError(f"missing {init_path}; run --stage prepare SEED={seed}")
     model.load_state_dict(torch.load(init_path, map_location=DEVICE), strict=True)  # identical start
@@ -384,7 +379,7 @@ def stage_train(arm, seed):
     optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=LR)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
     perm_rng = np.random.default_rng(seed)                 # batch order: identical across arms
-    ckpt_path = os.path.join(PHYS_CKPT_DIR, f"physics_jepa_{arm}_s{seed}_best.pth")
+    ckpt_path = os.path.join(ckpt_dir, f"physics_jepa_{arm}_s{seed}_best.pth")
     best_val, best_epoch, best_std = float("inf"), -1, 0.0
 
     for epoch in range(EPOCHS):
@@ -429,9 +424,20 @@ def stage_train(arm, seed):
                            "readout": os.environ.get("JEPA_READOUT", "mean"),
                            "predictor": os.environ.get("JEPA_PREDICTOR", "transformer"),
                            "mask_ratio": os.environ.get("JEPA_MASK_RATIO", "0.5")}}
-    with open(os.path.join(PHYS_CKPT_DIR, f"physics_jepa_{arm}_s{seed}_meta.json"), "w") as fh:
+    with open(os.path.join(ckpt_dir, f"physics_jepa_{arm}_s{seed}_meta.json"), "w") as fh:
         json.dump(meta_out, fh, indent=2)
     print(f"[{arm} s{seed}] best val {best_val:.5f} @epoch {best_epoch} -> {ckpt_path}", flush=True)
+
+
+def stage_train(arm, seed):
+    assert arm in ("raw", "cleaned")
+    _require_valid_prepared()
+    meta = np.load(os.path.join(PREP_DIR, "pretrain_meta.npz"))
+    X = torch.from_numpy(np.load(os.path.join(PREP_DIR, f"pretrain_{arm}_X.npy")))
+    M = torch.from_numpy(np.load(os.path.join(PREP_DIR, f"pretrain_{arm}_M.npy")))
+    init_path = os.path.join(PHYS_CKPT_DIR, f"physics_jepa_init_s{seed}.pth")
+    train_arm_from_arrays(arm, seed, X, M, meta["train_idx"], meta["val_idx"],
+                          init_path, PHYS_CKPT_DIR)
 
 
 # ---- stage: evaluate --------------------------------------------------------

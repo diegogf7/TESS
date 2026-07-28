@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 
@@ -23,7 +24,11 @@ from src.instrument_v2.area_commonmode_dataset import(
 
 from src.instrument_v2.fixed_teacher_instrument_jepa import FixedTeacherInstrumentJEPA
 from src.instrument_v2.regional_group_teacher import state_hash
-from src.instrument_v2.regional_cbv import build_or_load_area_bases, ridge_reconstruct
+from src.instrument_v2.regional_cbv import (
+    area_bases_cache_path,
+    build_or_load_area_bases,
+    ridge_reconstruct,
+)
 from src.instrument_v2.sector14_dataset import ensure_splits, ensure_time_range
 from src.instrument_v2.train_sector14_jepa import git_commit
 
@@ -61,6 +66,15 @@ MODE = os.environ.get("DECODER_MODE", "direct")           # "direct" (1024 flux)
 assert MODE in ("direct", "weights"), MODE
 _OUT_SUB = "single_star_decode" if MODE == "direct" else "single_star_weight_decode"
 OUT_DIR = os.environ.get("OUT_DIR", os.path.join(GROUP_ART_DIR, _OUT_SUB))
+
+
+def sha256_file(path, chunk=1 << 20):
+    """Full content SHA-256 of a file (chunked; artifacts can be GBs)."""
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for block in iter(lambda: fh.read(chunk), b""):
+            h.update(block)
+    return h.hexdigest()
 
 
 def build_decoder(out_dim=1024):
@@ -198,7 +212,18 @@ def main():
     torch.manual_seed(SEED)
     np.random.seed(SEED)
     os.makedirs(OUT_DIR, exist_ok=True)
-    print(f"git commit: {git_commit()}", flush=True)
+    print("================ resolved configuration ================", flush=True)
+    print(f"  git commit     : {git_commit()}", flush=True)
+    print(f"  DECODER_MODE   : {MODE}", flush=True)
+    print(f"  GROUP_SIZE/CBV_RANK/MIN_VALID: {GROUP_SIZE}/{CBV_RANK}/{MIN_VALID_STARS}", flush=True)
+    print(f"  SEED/EPOCHS/BATCH/LR: {SEED}/{EPOCHS}/{BATCH}/{LR}", flush=True)
+    print(f"  S14_DATA       : {S14_DATA}", flush=True)
+    print(f"  SPLIT_DIR      : {SPLIT_DIR}", flush=True)
+    print(f"  BASE_ART_DIR   : {BASE_ART_DIR}", flush=True)
+    print(f"  GROUP_ART_DIR  : {GROUP_ART_DIR}", flush=True)
+    print(f"  STAGE_B_CKPT   : {STAGE_B_CKPT}", flush=True)
+    print(f"  OUT_DIR        : {OUT_DIR}", flush=True)
+    print("========================================================", flush=True)
 
     df = pd.read_parquet(S14_DATA)
     df = df[df["sector"] == 14].drop_duplicates("TIC").reset_index(drop=True)
@@ -214,6 +239,11 @@ def main():
     bases = build_or_load_area_bases(train_ds.X, train_ds.M, train_ds.areas,
                                      sorted(train_ds.tics), CBV_RANK, GROUP_ART_DIR,
                                      GROUP_SIZE, MIN_VALID_STARS)
+    bases_npz = area_bases_cache_path(GROUP_ART_DIR, CBV_RANK, GROUP_SIZE,
+                                      MIN_VALID_STARS, sorted(train_ds.tics))
+    assert os.path.exists(bases_npz), bases_npz            # written/loaded just above
+    print(f"area bases (train TICs only): {bases_npz}", flush=True)
+    print(f"  sha256 {sha256_file(bases_npz)}", flush=True)
 
     # --- frozen Stage-B model (student + teacher + predictor all inside) ------
     model = FixedTeacherInstrumentJEPA(n_tokens=16, token_dim=16, d_model=256,
@@ -387,10 +417,26 @@ def main():
             vs_direct = {k: round(metrics[k]["median"] - d[k]["median"], 6)
                          for k in metrics if k in d}
 
+    train_area_rows = deterministic_area_rows(train_ds)
+    train_groups_per_area = {int(a): len(train_area_rows.get(a, [])) // GROUP_SIZE
+                             for a in sorted(bases)}
+    val_stars_per_area = {}
+    for i in eligible:
+        a = int(val_ds.areas[i])
+        val_stars_per_area[a] = val_stars_per_area.get(a, 0) + 1
+
     report = {"git_commit": git_commit(), "stage_b_ckpt": STAGE_B_CKPT,
               "decoder_mode": MODE, "group_size": GROUP_SIZE, "cbv_rank": CBV_RANK,
               "min_valid": MIN_VALID_STARS, "ridge_lambda": RIDGE_LAMBDA,
               "decoder_epochs": EPOCHS, "n_decoder_train_groups": int(len(Z)),
+              "area_bases_npz": bases_npz,
+              "artifact_sha256": {
+                  "stage_b_ckpt": sha256_file(STAGE_B_CKPT),
+                  "area_bases_npz": sha256_file(bases_npz),
+                  "decoder": sha256_file(os.path.join(OUT_DIR, "decoder.pth"))},
+              "decoder_train_groups_per_area": train_groups_per_area,
+              "val_stars_per_area": {int(k): int(v)
+                                     for k, v in sorted(val_stars_per_area.items())},
               "frozen_hashes_unchanged": True,
               "decoder_raw_output_dim": CBV_RANK if MODE == "weights" else 1024,
               "reconstructed_curve_length": 1024,

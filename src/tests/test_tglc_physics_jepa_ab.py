@@ -53,7 +53,10 @@ def test_arms_same_rows_and_order():
     raw_X, raw_M, cln_X, cln_M = build_arms(t, f, inst, dec, T0, T1)
     assert raw_X.shape == cln_X.shape == (3, GRID)
     rX2, _, cX2, _ = build_arms([t[1], t[0], t[2]], [f[1], f[0], f[2]], inst, dec, T0, T1)
-    assert np.allclose(raw_X[0], rX2[1]) and np.allclose(cln_X[0], cX2[1])   # row-aligned across arms
+    assert np.allclose(raw_X[0], rX2[1])                     # raw path: bitwise row-aligned
+    # cleaned path passes through the instrument decode, whose batched kernels
+    # round differently by batch position on some BLAS builds (~4e-8)
+    assert np.allclose(cln_X[0], cX2[1], atol=1e-6)          # row-aligned across arms
 
 
 # 2) raw and cleaned masks are identical
