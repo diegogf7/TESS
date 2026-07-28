@@ -80,6 +80,7 @@ CBV_RANK = 8
 
 EXPECTED_TIC_SECTOR_SHA = "6a1796a05d4313479a39cf8fdf5e8b273544558c28692fdbba9df63dc8f425cc"
 EXPECTED_N_EVAL = 2409
+EXPECTED_N_PRETRAIN = 123858
 MIN_GOOD = 64                     # drop degenerate pretraining curves (unlabeled) below this many cadences
 EPOCHS = 30
 BATCH_SIZE = 256
@@ -474,7 +475,7 @@ def _require_valid_prepared():
 
 # ---- stage: train -----------------------------------------------------------
 def stage_train(arm, seed):
-    assert arm in ("raw", "cleaned")
+    assert arm in ("raw", "cleaned", "cbv")   # cbv reuses this path verbatim, loads pretrain_cbv_*
     manifest = _require_valid_prepared()
     meta = np.load(os.path.join(PREP_DIR, "pretrain_meta.npz"))
     train_idx, val_idx = meta["train_idx"], meta["val_idx"]
@@ -646,10 +647,187 @@ def stage_evaluate(seed):
     print(f"wrote {OUT_DIR}/final_summary.json + per_curve_predictions.csv", flush=True)
 
 
+# ---- stage: prepare_cbv (build ONLY the CBV-cleaned arrays) ------------------
+def stage_prepare_cbv(seed):
+    """Reuse the existing raw experiment's rows/order/masks; build ONLY the four
+    CBV-cleaned arrays with the frozen instrument JEPA + K=8 weight decoder +
+    fixed area bases. Raw/direct-cleaned arrays, meta and manifest are untouched."""
+    pm_path = os.path.join(PREP_DIR, "pretrain_meta.npz")
+    em_path = os.path.join(PREP_DIR, "eval_meta.npz")
+    if not (os.path.exists(pm_path) and os.path.exists(em_path)):
+        raise RuntimeError("existing raw prepared arrays/meta missing; run the raw --stage prepare first")
+    pm = np.load(pm_path, allow_pickle=True)
+    em = np.load(em_path, allow_pickle=True)
+    with open(GRID_RANGE) as fh:
+        gr = json.load(fh)
+    t0, t1 = float(gr["t0"]), float(gr["t1"])
+
+    # --- eval cohort: byte-for-byte the same construction as stage_prepare ----
+    phyts = pd.read_parquet(PHYTS_PATH)
+    phyts = phyts[phyts["sector"] == 14].reset_index(drop=True)
+    phyts["TIC"] = phyts["TIC"].astype(str)
+    gaia_col = next((c for c in ("GaiaID", "gaiaid", "GAIADR3", "GAIADR2", "gaia_id")
+                     if c in phyts.columns), None)
+    phyts = phyts[["TIC", "sector", "label", gaia_col]].rename(columns={gaia_col: "phyts_gaia"})
+    eval_raw = _load_curves(EVAL_TGLC_PATH).rename(columns={"flux_raw": "aperture_flux"})
+    matched, _ = match_phyts_tglc(phyts, eval_raw)
+    matched = matched.rename(columns={"aperture_flux": "flux_raw"})
+    if len(matched) != EXPECTED_N_EVAL:
+        raise RuntimeError(f"eval cohort n={len(matched)} != {EXPECTED_N_EVAL}")
+    eval_tics = matched["TIC"].to_numpy().astype(str)
+    eval_gaia = matched["GAIADR3"].to_numpy()
+    eval_sectors = matched["sector"].to_numpy()
+    excl = set(zip(eval_gaia.tolist(), eval_sectors.tolist()))
+
+    # --- pretraining rows: same removal + quality filter ---------------------
+    pre = remove_eval_cohort(_load_curves(PRETRAIN_PATH), excl)
+    pre_times, pre_fluxes, pre = _filter_curves(pre, MIN_GOOD)
+    pre_tics = pre["TIC"].to_numpy().astype(str)
+
+    # --- order/count MUST match the existing experiment ----------------------
+    if not np.array_equal(pre_tics, pm["tics"].astype(str)):
+        raise RuntimeError("pretrain TIC order differs from existing pretrain_meta.npz")
+    if not np.array_equal(eval_tics, em["tics"].astype(str)):
+        raise RuntimeError("eval TIC order differs from existing eval_meta.npz")
+    if len(pre_tics) != EXPECTED_N_PRETRAIN:
+        raise RuntimeError(f"pretrain count {len(pre_tics)} != {EXPECTED_N_PRETRAIN}")
+    if len(eval_tics) != EXPECTED_N_EVAL:
+        raise RuntimeError(f"eval count {len(eval_tics)} != {EXPECTED_N_EVAL}")
+
+    # --- frozen instrument JEPA + K=8 weight decoder + fixed area bases -------
+    inst = strict_load(FixedTeacherInstrumentJEPA(n_tokens=16, token_dim=16, d_model=256, n_layers=4,
+                                                  readout="mean", predictor_type="mlp").to(DEVICE),
+                       torch.load(INST_CKPT, map_location=DEVICE)).eval()
+    for p in inst.parameters():
+        p.requires_grad_(False)
+    wdec = strict_load(build_decoder(CBV_RANK).to(DEVICE),
+                       torch.load(WEIGHT_DECODER_CKPT, map_location=DEVICE)).eval()
+    for p in wdec.parameters():
+        p.requires_grad_(False)
+    bases = _load_bases(_resolve_bases_npz())
+    before = (state_hash(inst.teacher), state_hash(inst.student),
+              state_hash(inst.predictor), state_hash(wdec))
+    print(f"CBV cleaning: {CBV_RANK} weights x {len(bases)} area bases "
+          f"({_resolve_bases_npz()})", flush=True)
+
+    # --- build ONLY the CBV arm (build_arms returns cbv in the 'cleaned' slot)-
+    print("building CBV pretraining arm...", flush=True)
+    _, _, pre_cbv_X, pre_cbv_M = build_arms(
+        pre_times, pre_fluxes, inst, wdec, t0, t1, _areas_for(pre), bases)
+    eval_times, eval_fluxes, matched2 = _filter_curves(matched, min_good=1)
+    if len(matched2) != EXPECTED_N_EVAL:
+        raise RuntimeError("an eval curve was dropped by the min-good filter")
+    print("building CBV evaluation arm...", flush=True)
+    _, _, ev_cbv_X, ev_cbv_M = build_arms(
+        eval_times, eval_fluxes, inst, wdec, t0, t1, _areas_for(matched2), bases)
+
+    after = (state_hash(inst.teacher), state_hash(inst.student),
+             state_hash(inst.predictor), state_hash(wdec))
+    if before != after:
+        raise RuntimeError("instrument/weight-decoder changed during CBV preparation")
+
+    # --- CBV masks must EXACTLY equal the existing raw masks ------------------
+    if not np.array_equal(pre_cbv_M, np.load(os.path.join(PREP_DIR, "pretrain_raw_M.npy"))):
+        raise RuntimeError("pretrain CBV masks != existing raw masks")
+    if not np.array_equal(ev_cbv_M, np.load(os.path.join(PREP_DIR, "eval_raw_M.npy"))):
+        raise RuntimeError("eval CBV masks != existing raw masks")
+
+    np.save(os.path.join(PREP_DIR, "pretrain_cbv_X.npy"), pre_cbv_X)
+    np.save(os.path.join(PREP_DIR, "pretrain_cbv_M.npy"), pre_cbv_M)
+    np.save(os.path.join(PREP_DIR, "eval_cbv_X.npy"), ev_cbv_X)
+    np.save(os.path.join(PREP_DIR, "eval_cbv_M.npy"), ev_cbv_M)
+    print(f"wrote CBV arrays to {PREP_DIR} (pretrain {len(pre_cbv_X)}, eval {len(ev_cbv_X)})", flush=True)
+    _ensure_init(seed)   # reuse (never overwrite) the existing seed-0 init
+
+
+# ---- stage: evaluate_cbv (decisive matched comparison only) -----------------
+def stage_evaluate_cbv(seed):
+    """CBV-trained JEPA on CBV-cleaned curves vs existing raw-trained JEPA on raw
+    curves. Same 1927/482 TIC-disjoint KNN split; nothing retrained."""
+    manifest = _require_valid_prepared()
+    em = np.load(os.path.join(PREP_DIR, "eval_meta.npz"), allow_pickle=True)
+    y, tics, gaia, sectors = em["y"], em["tics"].astype(str), em["gaia"], em["sectors"]
+    present = np.unique(y)
+
+    for f in ("eval_cbv_X.npy", "eval_cbv_M.npy"):
+        if not os.path.exists(os.path.join(PREP_DIR, f)):
+            raise RuntimeError(f"missing {f}; run --stage prepare_cbv first")
+    Xr = np.load(os.path.join(PREP_DIR, "eval_raw_X.npy"))
+    Mr = np.load(os.path.join(PREP_DIR, "eval_raw_M.npy"))
+    Xc = np.load(os.path.join(PREP_DIR, "eval_cbv_X.npy"))
+    Mc = np.load(os.path.join(PREP_DIR, "eval_cbv_M.npy"))
+    if not np.array_equal(Mr, Mc):
+        raise RuntimeError("raw and CBV eval masks differ -- arms not matched")
+
+    raw_ck = os.path.join(RAW_CKPT_DIR, f"physics_jepa_raw_s{seed}_best.pth")
+    cbv_ck = os.path.join(PHYS_CKPT_DIR, f"physics_jepa_cbv_s{seed}_best.pth")
+
+    def _load(ck):
+        if not os.path.exists(ck):
+            raise RuntimeError(f"missing checkpoint {ck}")
+        m = build_latent_jepa().to(DEVICE)
+        m.load_state_dict(torch.load(ck, map_location=DEVICE), strict=True)
+        m.eval()
+        for p in m.parameters():
+            p.requires_grad_(False)
+        return m
+
+    raw_jepa, cbv_jepa = _load(raw_ck), _load(cbv_ck)
+    metas = {}
+    for name, ck in (("raw", raw_ck), ("cbv", cbv_ck)):
+        mp = ck.replace("_best.pth", "_meta.json")
+        metas[name] = json.load(open(mp)) if os.path.exists(mp) else {}
+    started_identical = (metas["raw"].get("init_hash") == metas["cbv"].get("init_hash")
+                         and metas["raw"].get("init_hash") is not None)
+
+    # same shared TIC-disjoint split as stage_evaluate (1927/482)
+    tr, te = next(GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=0).split(
+        np.arange(len(tics)), y, groups=tics))
+
+    lat_raw = encode_physics(raw_jepa, Xr, Mr)
+    lat_cbv = encode_physics(cbv_jepa, Xc, Mc)
+    raw_acc, raw_rec, _ = _classify(lat_raw, y, tr, te, present)
+    cbv_acc, cbv_rec, _ = _classify(lat_cbv, y, tr, te, present)
+    cbv_minus_raw = cbv_acc - raw_acc
+    collapse = {
+        "raw_jepa_on_raw": {"latent_std": float(lat_raw.std(0).mean()),
+                            "effective_rank": _effective_rank(lat_raw)},
+        "cbv_jepa_on_cbv": {"latent_std": float(lat_cbv.std(0).mean()),
+                            "effective_rank": _effective_rank(lat_cbv)}}
+
+    summary = {
+        "comparison": "cbv_jepa_on_cbv MINUS raw_jepa_on_raw",
+        "balanced_accuracy": {"raw_jepa_on_raw": raw_acc, "cbv_jepa_on_cbv": cbv_acc},
+        "cbv_minus_raw": cbv_minus_raw,
+        "per_class_recall": {"raw_jepa_on_raw": raw_rec, "cbv_jepa_on_cbv": cbv_rec},
+        "collapse_metrics": collapse,
+        "n_eval": int(len(tics)), "n_eval_train": int(len(tr)), "n_eval_test": int(len(te)),
+        "classes": [CLASSES[c] for c in present], "seed": seed,
+        "raw_ckpt": raw_ck, "cbv_ckpt": cbv_ck,
+        "jepas_started_identical": bool(started_identical),
+        "init_hash_raw": metas["raw"].get("init_hash"),
+        "init_hash_cbv": metas["cbv"].get("init_hash"),
+        "identical_eval_rows": True,
+        "raw_cbv_eval_masks_identical": True,
+        "eval_tic_sector_sha256": ordered_hash_tic_sector(tics, sectors),
+        "eval_split_sha256": _ordered_hash(np.concatenate([tr, te])),
+        "weight_decoder_ckpt": WEIGHT_DECODER_CKPT, "bases_npz": _resolve_bases_npz(),
+        "phyts_flux_used": False, "git_commit": _git_commit(),
+    }
+    out_path = os.path.join(OUT_DIR, "cbv_final_summary.json")
+    with open(out_path, "w") as fh:
+        json.dump(summary, fh, indent=2)
+    print(f"raw JEPA on raw : {raw_acc:.4f}", flush=True)
+    print(f"cbv JEPA on cbv : {cbv_acc:.4f}", flush=True)
+    print(f"CBV - RAW       : {cbv_minus_raw:+.4f}   (started_identical={started_identical})", flush=True)
+    print(f"wrote {out_path}", flush=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", required=True, choices=["prepare", "train", "evaluate"])
-    ap.add_argument("--arm", choices=["raw", "cleaned"], default=os.environ.get("ARM"))
+    ap.add_argument("--stage", required=True,
+                    choices=["prepare", "train", "evaluate", "prepare_cbv", "evaluate_cbv"])
+    ap.add_argument("--arm", choices=["raw", "cleaned", "cbv"], default=os.environ.get("ARM"))
     ap.add_argument("--seed", type=int, default=int(os.environ.get("SEED", "0")))
     args = ap.parse_args()
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -661,13 +839,17 @@ def main():
 
     if args.stage == "prepare":
         stage_prepare(args.seed)
+    elif args.stage == "prepare_cbv":
+        stage_prepare_cbv(args.seed)
     elif args.stage == "train":
         arm = args.arm
         if arm is None and "SLURM_ARRAY_TASK_ID" in os.environ:
             arm = {"0": "raw", "1": "cleaned"}[os.environ["SLURM_ARRAY_TASK_ID"]]
         if arm is None:
-            raise SystemExit("train stage needs --arm raw|cleaned (or array task 0/1)")
+            raise SystemExit("train stage needs --arm raw|cleaned|cbv (or array task 0/1)")
         stage_train(arm, args.seed)
+    elif args.stage == "evaluate_cbv":
+        stage_evaluate_cbv(args.seed)
     else:
         stage_evaluate(args.seed)
 
