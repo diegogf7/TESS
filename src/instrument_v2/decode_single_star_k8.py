@@ -57,14 +57,19 @@ CKPT_DIR = os.environ.get(
 STAGE_B_CKPT = os.environ.get(
     "STAGE_B_CKPT", os.path.join(
         CKPT_DIR, f"group_cbv_mlp_g{GROUP_SIZE}_r{CBV_RANK}_mv{MIN_VALID_STARS}_s{SEED}_best.pth"))
-MODE = os.environ.get("DECODER_MODE", "direct")           # direct (1024 flux) | weights (8 CBV) | weights_area_conditioned (8 CBV + area one-hot)
-assert MODE in ("direct", "weights", "weights_area_conditioned"), MODE
-IS_WEIGHTS = MODE != "direct"                             # both weight modes predict 8 CBV weights
-AREA_COND = MODE == "weights_area_conditioned"           # concat area one-hot onto the frozen latent
+MODE = os.environ.get("DECODER_MODE", "direct")           # direct | weights | weights_area_conditioned | weights_area_heads
+assert MODE in ("direct", "weights", "weights_area_conditioned", "weights_area_heads"), MODE
+IS_WEIGHTS = MODE != "direct"                             # all weight modes predict 8 CBV weights
+AREA_COND = MODE in ("weights_area_conditioned", "weights_area_heads")  # concat area one-hot onto the latent
+AREA_HEADS = MODE == "weights_area_heads"                 # shared trunk + one 8-weight head per area
 _OUT_SUB = {"direct": "single_star_decode",
             "weights": "single_star_weight_decode",
-            "weights_area_conditioned": "single_star_weight_decode_area_conditioned"}[MODE]
+            "weights_area_conditioned": "single_star_weight_decode_area_conditioned",
+            "weights_area_heads": "single_star_weight_decode_area_heads"}[MODE]
 OUT_DIR = os.environ.get("OUT_DIR", os.path.join(GROUP_ART_DIR, _OUT_SUB))
+# area-head decoder warm-starts every head + trunk from the existing GLOBAL decoder
+GLOBAL_DECODER_CKPT = os.environ.get(
+    "GLOBAL_DECODER_CKPT", os.path.join(GROUP_ART_DIR, "single_star_weight_decode", "decoder.pth"))
 
 
 def build_decoder(out_dim=1024, in_dim=256):
@@ -92,6 +97,63 @@ def area_one_hot(a2i, area, n_areas=None):
     v = np.zeros(n, dtype=np.float32)
     v[a2i[a]] = 1.0
     return v
+
+
+class AreaHeadDecoder(nn.Module):
+    """Shared trunk + one linear 8-weight head per area. Consumes the SAME
+    concat(latent_256, area_one_hot) input as the area-one-hot decoder (so it is a
+    drop-in for decode()/cleaning): it splits off the one-hot, argmax -> head
+    index, and applies that area's head to the shared trunk output."""
+
+    def __init__(self, n_areas, out_dim=8, latent_dim=256, hidden=512):
+        super().__init__()
+        self.n_areas, self.out_dim, self.latent_dim, self.hidden = (
+            int(n_areas), int(out_dim), int(latent_dim), int(hidden))
+        self.trunk = nn.Sequential(nn.LayerNorm(latent_dim), nn.Linear(latent_dim, hidden), nn.GELU())
+        self.head_w = nn.Parameter(torch.zeros(self.n_areas, self.out_dim, hidden))
+        self.head_b = nn.Parameter(torch.zeros(self.n_areas, self.out_dim))
+
+    def forward(self, x):
+        if x.dim() == 3:                                   # (B,16,16) with no one-hot is invalid here
+            x = x.reshape(x.shape[0], -1)
+        latent, onehot = x[:, :self.latent_dim], x[:, self.latent_dim:]
+        if onehot.shape[1] != self.n_areas:
+            raise RuntimeError(f"expected concat(latent {self.latent_dim}, one-hot {self.n_areas}); "
+                               f"got width {x.shape[1]}")
+        idx = onehot.argmax(dim=1)                          # known area id -> head index
+        h = self.trunk(latent)
+        return torch.einsum("boh,bh->bo", self.head_w[idx], h) + self.head_b[idx]
+
+
+def build_area_head_decoder(n_areas, out_dim=8, latent_dim=256, hidden=512, global_state=None):
+    """AreaHeadDecoder, optionally warm-started from the GLOBAL decoder's
+    Sequential state_dict (Flatten, LayerNorm '1', Linear '2', GELU, Linear '4')
+    so every head + trunk begins at the global solution."""
+    dec = AreaHeadDecoder(n_areas, out_dim, latent_dim, hidden)
+    if global_state is not None:
+        with torch.no_grad():
+            dec.trunk[0].weight.copy_(global_state["1.weight"]); dec.trunk[0].bias.copy_(global_state["1.bias"])
+            dec.trunk[1].weight.copy_(global_state["2.weight"]); dec.trunk[1].bias.copy_(global_state["2.bias"])
+            dec.head_w.copy_(global_state["4.weight"].unsqueeze(0).expand(dec.n_areas, -1, -1))
+            dec.head_b.copy_(global_state["4.bias"].unsqueeze(0).expand(dec.n_areas, -1))
+    return dec
+
+
+def load_area_decoder(path, device):
+    """Load either an area-one-hot or an area-head decoder checkpoint (both carry
+    area_to_index). Returns (decoder, area_to_index, kind)."""
+    ck = torch.load(path, map_location=device)
+    if not (isinstance(ck, dict) and "area_to_index" in ck):
+        raise RuntimeError(f"{path} is not an area decoder checkpoint")
+    a2i = {int(k): int(v) for k, v in ck["area_to_index"].items()}
+    kind = ck.get("decoder_kind", "area_one_hot")
+    if kind == "area_heads":
+        dec = build_area_head_decoder(int(ck["n_areas"]), out_dim=int(ck["cbv_rank"]))
+    else:
+        dec = build_decoder(int(ck["cbv_rank"]), in_dim=int(ck["in_dim"]))
+    dec.load_state_dict(ck["state_dict"])
+    dec.to(device).eval()
+    return dec, a2i, kind
 
 
 def masked_smooth_l1(prediction, target, mask):
@@ -271,9 +333,14 @@ def main():
     # area conditioning: deterministic sorted training-area map + per-group one-hot
     a2i = area_index_map(sorted(bases)) if AREA_COND else None
     n_areas = len(a2i) if AREA_COND else 0
-    in_dim = 256 + n_areas
+    in_dim = 256 + n_areas                                # concat(latent 256, area one-hot)
     out_dim = CBV_RANK if IS_WEIGHTS else 1024
-    decoder = build_decoder(out_dim, in_dim=in_dim).to(DEVICE)
+    if AREA_HEADS:                                        # shared trunk + per-area head, warm-started from global
+        gstate = torch.load(GLOBAL_DECODER_CKPT, map_location=DEVICE)
+        decoder = build_area_head_decoder(n_areas, out_dim=CBV_RANK, global_state=gstate).to(DEVICE)
+        print(f"area-head decoder: {n_areas} heads warm-started from global {GLOBAL_DECODER_CKPT}", flush=True)
+    else:
+        decoder = build_decoder(out_dim, in_dim=in_dim).to(DEVICE)
     if AREA_COND:
         oh = np.zeros((len(Aid), n_areas), dtype=np.float32)
         oh[np.arange(len(Aid)), [a2i[int(a)] for a in Aid]] = 1.0
@@ -321,7 +388,8 @@ def main():
     # inference can build the one-hot and hard-fail on unknown areas.
     if AREA_COND:
         torch.save({"state_dict": decoder.state_dict(), "area_to_index": a2i,
-                    "n_areas": n_areas, "in_dim": in_dim, "cbv_rank": CBV_RANK},
+                    "n_areas": n_areas, "in_dim": in_dim, "cbv_rank": CBV_RANK,
+                    "decoder_kind": "area_heads" if AREA_HEADS else "area_one_hot"},
                    os.path.join(OUT_DIR, "decoder.pth"))
     else:
         torch.save(decoder.state_dict(), os.path.join(OUT_DIR, "decoder.pth"))
@@ -460,6 +528,8 @@ def main():
               "test_split_loaded": False, "metrics": metrics,
               "area_conditioned": AREA_COND, "n_areas": n_areas,
               "decoder_in_dim": in_dim,
+              "decoder_kind": ("area_heads" if AREA_HEADS
+                               else "area_one_hot" if AREA_COND else "plain"),
               "vs_direct_decoder_median_delta": vs_direct}
     with open(os.path.join(OUT_DIR, "final_summary.json"), "w") as fh:
         json.dump(report, fh, indent=2)

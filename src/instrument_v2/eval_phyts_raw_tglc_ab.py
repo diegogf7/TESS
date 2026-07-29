@@ -147,19 +147,15 @@ def main():
         from src.instrument_v2.run_tglc_physics_jepa_ab import (   # lazy: avoid import cycle
             WEIGHT_DECODER_CKPT, CBV_RANK, _resolve_bases_npz, _load_bases, _areas_for,
         )
-        from src.instrument_v2.decode_single_star_k8 import area_index_map
+        from src.instrument_v2.decode_single_star_k8 import area_index_map, load_area_decoder
         bases = _load_bases(_resolve_bases_npz())
         areas = _areas_for(matched)
-        if AREA_CONDITIONED:                              # area-conditioned weight decoder
-            ck = torch.load(AREA_DECODER, map_location=DEVICE)
-            if not (isinstance(ck, dict) and "area_to_index" in ck):
-                raise RuntimeError(f"{AREA_DECODER} is not an area-conditioned checkpoint")
-            a2i = {int(k): int(v) for k, v in ck["area_to_index"].items()}
+        if AREA_CONDITIONED:                              # area decoder (one-hot OR area-heads; drop-in)
+            decoder, a2i, kind = load_area_decoder(AREA_DECODER, DEVICE)
+            _freeze(decoder)
             if a2i != area_index_map(sorted(bases)):
                 raise RuntimeError("area map in checkpoint != deterministic sorted training-area map")
-            decoder = _freeze(build_decoder(int(ck["cbv_rank"]), in_dim=int(ck["in_dim"])).to(DEVICE))
-            decoder.load_state_dict(ck["state_dict"])
-            print(f"CBV cleaning (AREA-CONDITIONED): {ck['n_areas']} areas, {AREA_DECODER}", flush=True)
+            print(f"CBV cleaning (AREA {kind}): {len(a2i)} areas, {AREA_DECODER}", flush=True)
         else:
             decoder = _freeze(build_decoder(CBV_RANK).to(DEVICE))
             decoder.load_state_dict(torch.load(WEIGHT_DECODER_CKPT, map_location=DEVICE))
