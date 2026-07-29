@@ -51,8 +51,11 @@ for k in range(0, len(ids), BATCH):
 df["Tmag"] = df["TIC"].map(tmag_by_tic)
 
 tm = df["Tmag"].dropna().to_numpy()
-plt.figure(figsize = (7, 5))
+plt.figure(figsize = (9, 5))
 plt.hist(tm, bins = 30, edgecolor = "black")
+plt.xticks(np.arange(np.floor(tm.min()), np.ceil(tm.max()) + 0.5, 0.5), rotation = 45)
+plt.grid(axis = "x", alpha = 0.3)
+
 plt.xlabel("Magnitude")
 
 plt.ylabel("Number of stars")
