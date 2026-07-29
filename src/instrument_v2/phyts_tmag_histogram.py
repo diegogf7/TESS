@@ -53,17 +53,18 @@ df["Tmag"] = df["TIC"].map(tmag_by_tic)
 tm = df["Tmag"].dropna().to_numpy()
 
 bins = np.arange(np.floor(tm.min()), np.ceil(tm.max()) + 0.5, 0.5)
-plt.figure(figsize = (10, 5))
-plt.hist(tm, bins = bins, edgecolor = "black")
-plt.xticks(bins, rotation = 45)
+fig, ax = plt.subplots(figsize=(12, 5))
+ax.hist(tm, bins=bins, edgecolor="black")
+ax.set_xticks(bins)
+ax.tick_params(axis="x", rotation=45)
+ax.grid(False)                       # <- removes the grey vertical lines
+ax.set_xlabel("Magnitude")
+ax.set_ylabel("Number of stars")
+ax.set_title("PhyTS sector 14 Magnitude")
+fig.tight_layout()
+fig.savefig(OUT_PNG, dpi=130)
+plt.close(fig)
 
-plt.xlabel("Magnitude")
-
-plt.ylabel("Number of stars")
-plt.title(f"PhyTS sector 14 Magnitude")
-plt.tight_layout()
-plt.savefig(OUT_PNG, dpi= 130)
-plt.close()
 
 matched = int(df["Tmag"].notna().sum())
 missing = int(df["Tmag"].isna().sum())
