@@ -28,7 +28,7 @@ import torch
 from src.data.data import CLASSES, CLASS_TO_IDX
 from src.worked_folder.physics.latent_jepa import build_latent_jepa
 from src.instrument_v2.fixed_teacher_instrument_jepa import FixedTeacherInstrumentJEPA
-from src.instrument_v2.decode_single_star_k8 import build_decoder
+from src.instrument_v2.decode_single_star_k8 import build_decoder, area_one_hot
 from src.instrument_v2.regional_group_teacher import state_hash
 from src.instrument_v2.sector14_dataset import BAD_TESS_MASK          # central qclean mask (16437)
 from src.instrument_v2.eval_phyts_instrument_ab import (              # exact reuse
@@ -48,6 +48,13 @@ OUT_DIR = os.environ.get(
 # template = area_basis @ 8-weights. Everything after the template is identical.
 CLEAN_MODE = os.environ.get("CLEAN_MODE", "direct")
 assert CLEAN_MODE in ("direct", "cbv"), CLEAN_MODE
+# AREA_CONDITIONED=1 (cbv only): use the area-conditioned weight decoder
+# (decoder_input = concat(latent, area one-hot)) instead of the global one.
+AREA_CONDITIONED = os.environ.get("AREA_CONDITIONED", "0") == "1"
+AREA_DECODER = os.environ.get(
+    "AREA_DECODER",
+    "artifacts/instrument_v2/custom_group32_cbv8_mlp_qclean_v1/"
+    "single_star_weight_decode_area_conditioned/decoder.pth")
 
 
 def quality_filter(time, flux, tess, tglc):
@@ -135,16 +142,29 @@ def main():
                                       readout="mean", predictor_type="mlp").to(DEVICE)
     inst.load_state_dict(torch.load(INST_CKPT, map_location=DEVICE))
     _freeze(inst)
+    a2i = None
     if CLEAN_MODE == "cbv":                               # 8-weight decoder + fixed area bases
         from src.instrument_v2.run_tglc_physics_jepa_ab import (   # lazy: avoid import cycle
             WEIGHT_DECODER_CKPT, CBV_RANK, _resolve_bases_npz, _load_bases, _areas_for,
         )
-        decoder = _freeze(build_decoder(CBV_RANK).to(DEVICE))
-        decoder.load_state_dict(torch.load(WEIGHT_DECODER_CKPT, map_location=DEVICE))
+        from src.instrument_v2.decode_single_star_k8 import area_index_map
         bases = _load_bases(_resolve_bases_npz())
         areas = _areas_for(matched)
-        print(f"CBV cleaning: {CBV_RANK} weights x {len(bases)} area bases "
-              f"({_resolve_bases_npz()})", flush=True)
+        if AREA_CONDITIONED:                              # area-conditioned weight decoder
+            ck = torch.load(AREA_DECODER, map_location=DEVICE)
+            if not (isinstance(ck, dict) and "area_to_index" in ck):
+                raise RuntimeError(f"{AREA_DECODER} is not an area-conditioned checkpoint")
+            a2i = {int(k): int(v) for k, v in ck["area_to_index"].items()}
+            if a2i != area_index_map(sorted(bases)):
+                raise RuntimeError("area map in checkpoint != deterministic sorted training-area map")
+            decoder = _freeze(build_decoder(int(ck["cbv_rank"]), in_dim=int(ck["in_dim"])).to(DEVICE))
+            decoder.load_state_dict(ck["state_dict"])
+            print(f"CBV cleaning (AREA-CONDITIONED): {ck['n_areas']} areas, {AREA_DECODER}", flush=True)
+        else:
+            decoder = _freeze(build_decoder(CBV_RANK).to(DEVICE))
+            decoder.load_state_dict(torch.load(WEIGHT_DECODER_CKPT, map_location=DEVICE))
+            print(f"CBV cleaning: {CBV_RANK} weights x {len(bases)} area bases "
+                  f"({_resolve_bases_npz()})", flush=True)
     else:
         decoder = _freeze(build_decoder(1024).to(DEVICE))
         decoder.load_state_dict(torch.load(DECODER_CKPT, map_location=DEVICE))
@@ -162,7 +182,8 @@ def main():
                                 matched["TESS_flags"].iloc[i], matched["TGLC_flags"].iloc[i])
         A_X[i], A_M[i] = physics_grid(ft, ff)
         basis = bases[int(areas[i])] if CLEAN_MODE == "cbv" else None    # this curve's area basis
-        ct, cf = instrument_cleaned_curve(ft, ff, inst, decoder, t0, t1, basis)   # no scale fit
+        av = area_one_hot(a2i, int(areas[i])) if (CLEAN_MODE == "cbv" and AREA_CONDITIONED) else None
+        ct, cf = instrument_cleaned_curve(ft, ff, inst, decoder, t0, t1, basis, av)   # no scale fit
         B_X[i], B_M[i] = physics_grid(ct, cf)
         if i % 200 == 0:
             print(f"  building arms {i}/{n_matched}", flush=True)
@@ -218,7 +239,9 @@ def main():
         "matched_by": "GaiaDR3+sector (TIC is not unique -- blends)",
         "phys_ckpt": PHYS_CKPT, "inst_ckpt": INST_CKPT,
         "clean_mode": CLEAN_MODE,
-        "decoder_ckpt": (WEIGHT_DECODER_CKPT if CLEAN_MODE == "cbv" else DECODER_CKPT),
+        "area_conditioned": bool(CLEAN_MODE == "cbv" and AREA_CONDITIONED),
+        "decoder_ckpt": (AREA_DECODER if (CLEAN_MODE == "cbv" and AREA_CONDITIONED)
+                         else WEIGHT_DECODER_CKPT if CLEAN_MODE == "cbv" else DECODER_CKPT),
         "cbv_bases_npz": (_resolve_bases_npz() if CLEAN_MODE == "cbv" else None),
         "tglc_path": TGLC_PATH,
         "model_hashes_unchanged": True, "phyts_flux_used": False,
