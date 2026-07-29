@@ -8,8 +8,8 @@ from astroquery.mast import Catalogs
 HF_REPO = "/orcd/scratch/orcd/006/diegogon/phyts/TESS/TESS/split"
 
 FILES = ["tess_classification_train_30min.parquet",
-         "tess_classification_val_30min.parquet",
-         "tess_classification_test_30min.parquet"]
+         "tess_classification_val_30min.parquet"
+         ]
 
 OUT_PNG = "phyts_sector14_tmag_hist.png"
 BATCH = 200
