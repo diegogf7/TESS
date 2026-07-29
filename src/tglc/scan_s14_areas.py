@@ -13,7 +13,8 @@ BULK = os.environ.get("BULK", os.path.join(ROOT, "s0014_full.sh"))
 DENSE_V2 = os.environ.get("DENSE_V2", os.path.join(ROOT, "tglc_raw_cadence_s14_dense_v2.parquet"))
 OUT_DIR = os.environ.get("OUT_DIR", ROOT)
 TARGET_TOTAL = int(os.environ.get("TARGET_TOTAL", "1400"))   # downloaded/area to leave 1000 hopefully train after split
-CHUNK = int(os.environ.get("GAIA_CHUNK", "5000"))
+CHUNK = int(os.environ.get("GAIA_CHUNK", "20000"))           # Gaia ids per query
+MAX_NEW = int(os.environ.get("MAX_NEW", "0"))                # >0 = stop after querying this many candidates (bound runtime)
 CACHE = os.path.join(OUT_DIR, "s14_bulk_area_scan.parquet")   # resumable Gaia crossmatch cache
 
 LINE_RE = re.compile(r"gaiaid-(\d+)-s0014-cam(\d)-ccd(\d)")
@@ -56,52 +57,60 @@ def main():
     bulk = parse_bulk(BULK)
     print(f"parsed {len(bulk)} unique S14 targets from the bulk list", flush=True)
 
-    # ra/dec: reuse the downloaded parquet where we already have it
-    known = pd.read_parquet(DENSE_V2, columns=["GAIADR3", "ra", "dec"]).dropna()
-    known["GAIADR3"] = known["GAIADR3"].astype("int64")
-    known = known.drop_duplicates("GAIADR3").set_index("GAIADR3")
-    downloaded_ids = set(known.index.tolist())
-    bulk["ra"] = bulk["GAIADR3"].map(known["ra"])
-    bulk["dec"] = bulk["GAIADR3"].map(known["dec"])
-    print(f"already downloaded (ra/dec known): {bulk['ra'].notna().sum()}/{len(bulk)}", flush=True)
+    # what we already have, per area (dense_v2 already carries `area`)
+    dv = pd.read_parquet(DENSE_V2, columns=["GAIADR3", "area"]).dropna()
+    dv["GAIADR3"] = dv["GAIADR3"].astype("int64")
+    downloaded_ids = set(dv["GAIADR3"].tolist())
+    dl_counts = {int(a): int(n) for a, n in dv.groupby("area").size().items()}
+    needed = {a: TARGET_TOTAL - n for a, n in dl_counts.items() if n < TARGET_TOTAL}   # short areas -> slots to fill
+    print(f"already downloaded: {len(downloaded_ids)} stars in {len(dl_counts)} areas; "
+          f"{len(needed)} areas below {TARGET_TOTAL} (need {sum(needed.values())} new)", flush=True)
+    if not needed:
+        print("all areas already at target; nothing to download", flush=True); return
 
-    need = bulk[bulk["ra"].isna()]["GAIADR3"].tolist()
+    # candidates = NOT-yet-downloaded, shuffled so we don't march through one chip
+    cand = bulk[~bulk["GAIADR3"].isin(downloaded_ids)].sample(frac=1, random_state=0).reset_index(drop=True)
+    print(f"{len(cand)} candidate targets to consider (streaming, stop when short areas fill)", flush=True)
+
     radec = {}
     if os.path.exists(CACHE):
         c = pd.read_parquet(CACHE)
         radec = {int(g): (float(r), float(d)) for g, r, d in zip(c["GAIADR3"], c["ra"], c["dec"])}
-        need = [g for g in need if g not in radec]
-        print(f"resumed {len(radec)} cached Gaia positions; {len(need)} still to query", flush=True)
-    if need:
-        radec.update(gaia_radec(need))
-        pd.DataFrame([(g, r, d) for g, (r, d) in radec.items()],
-                     columns=["GAIADR3", "ra", "dec"]).to_parquet(CACHE)
-    fill = bulk["ra"].isna()
-    bulk.loc[fill, "ra"] = bulk.loc[fill, "GAIADR3"].map(lambda g: radec.get(g, (np.nan, np.nan))[0])
-    bulk.loc[fill, "dec"] = bulk.loc[fill, "GAIADR3"].map(lambda g: radec.get(g, (np.nan, np.nan))[1])
+        print(f"resumed {len(radec)} cached Gaia positions", flush=True)
 
-    resolved = bulk.dropna(subset=["ra", "dec"]).copy()
-    resolved["sector"] = 14
-    resolved = add_area(resolved)
-    resolved = resolved[resolved["area"] != -1]
-    resolved["downloaded"] = resolved["GAIADR3"].isin(downloaded_ids)
-    print(f"resolved ra/dec + area for {len(resolved)}/{len(bulk)} targets "
-          f"({len(bulk) - len(resolved)} unresolved -- no Gaia match)", flush=True)
+    dl_lines, new_found, queried = [], {}, 0
+    for k in range(0, len(cand), CHUNK):
+        chunk = cand.iloc[k:k + CHUNK].copy()
+        miss = [int(g) for g in chunk["GAIADR3"] if int(g) not in radec]
+        if miss:
+            radec.update(gaia_radec(miss))
+            pd.DataFrame([(g, r, d) for g, (r, d) in radec.items()],
+                         columns=["GAIADR3", "ra", "dec"]).to_parquet(CACHE)
+        chunk["ra"] = chunk["GAIADR3"].map(lambda g: radec.get(int(g), (np.nan, np.nan))[0])
+        chunk["dec"] = chunk["GAIADR3"].map(lambda g: radec.get(int(g), (np.nan, np.nan))[1])
+        chunk = chunk.dropna(subset=["ra", "dec"])
+        chunk["sector"] = 14
+        chunk = add_area(chunk)
+        for row in chunk.itertuples():                       # keep only short-area hits still needing slots
+            a = int(row.area)
+            if needed.get(a, 0) > 0:
+                dl_lines.append(row.curl)
+                needed[a] -= 1
+                new_found[a] = new_found.get(a, 0) + 1
+        queried += len(chunk)
+        remaining = sum(v for v in needed.values() if v > 0)
+        print(f"  queried {queried} | collected {len(dl_lines)} | short slots left {remaining}", flush=True)
+        if remaining == 0:
+            print("all short areas filled -- stopping early", flush=True); break
+        if MAX_NEW and queried >= MAX_NEW:
+            print(f"hit MAX_NEW={MAX_NEW} -- stopping (some areas may still be short)", flush=True); break
 
-    # per-area ceiling + how many are already downloaded
     rep = []
-    dl_lines = []
-    for area, g in resolved.groupby("area"):
-        avail = len(g)
-        dl = int(g["downloaded"].sum())
-        need_more = max(0, TARGET_TOTAL - dl)
-        candidates = g[~g["downloaded"]]
-        take = candidates.head(need_more) if need_more else candidates.head(0)
-        dl_lines.extend(take["curl"].tolist())
-        rep.append({"area": int(area), "downloaded": dl, "available_total": avail,
-                    "available_new": int(len(candidates)), "will_download": int(len(take)),
-                    "reachable_target": bool(avail >= TARGET_TOTAL),
-                    "projected_total": int(dl + len(take))})
+    for a in sorted(dl_counts):
+        got = new_found.get(a, 0)
+        rep.append({"area": a, "downloaded": dl_counts[a], "new_found": got,
+                    "projected_total": dl_counts[a] + got,
+                    "still_short": max(0, TARGET_TOTAL - dl_counts[a] - got)})
     rep = sorted(rep, key=lambda r: r["projected_total"])
 
     with open(os.path.join(OUT_DIR, "s14_area_availability.json"), "w") as fh:
@@ -112,16 +121,18 @@ def main():
         fh.write("#!/bin/bash -l\nset -u\ncd " + ROOT + "\n")
         fh.write("\n".join(l.replace("curl -f", "curl -sf") for l in dl_lines) + "\n")
 
-    unreachable = [r for r in rep if not r["reachable_target"]]
+    still_short = [r for r in rep if r["still_short"] > 0]
     print(f"\nTARGET (downloaded/area) = {TARGET_TOTAL}", flush=True)
-    print(f"{'area':>5} {'downloaded':>10} {'avail_total':>12} {'will_dl':>8} {'projected':>10} reachable", flush=True)
+    print(f"{'area':>5} {'downloaded':>10} {'new_found':>9} {'projected':>10} {'still_short':>11}", flush=True)
     for r in rep:
-        print(f"{r['area']:>5} {r['downloaded']:>10} {r['available_total']:>12} "
-              f"{r['will_download']:>8} {r['projected_total']:>10} {r['reachable_target']}", flush=True)
+        print(f"{r['area']:>5} {r['downloaded']:>10} {r['new_found']:>9} "
+              f"{r['projected_total']:>10} {r['still_short']:>11}", flush=True)
     print(f"\nto download: {len(dl_lines)} new targets -> {tgt}", flush=True)
-    if unreachable:
-        print(f"UNREACHABLE ({len(unreachable)} areas have < {TARGET_TOTAL} total available -- "
-              f"physical ceiling): {[r['area'] for r in unreachable]}", flush=True)
+    if still_short:
+        print(f"STILL SHORT after this scan ({len(still_short)} areas -- ran out of candidates "
+              f"or hit MAX_NEW): {[(r['area'], r['still_short']) for r in still_short]}", flush=True)
+    else:
+        print("all short areas filled to target", flush=True)
     print(f"wrote s14_area_availability.csv/json to {OUT_DIR}", flush=True)
 
 
