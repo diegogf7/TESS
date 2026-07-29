@@ -12,7 +12,7 @@ FILES = ["tess_classification_train_30min.parquet",
          "tess_classification_test.parquet"
          ]
 
-OUT_PNG = "phyts_sector14_tmag_hist.png"
+OUT_PNG = "phyts_sector14_tmag_0p5.png"
 BATCH = 200
 
 
