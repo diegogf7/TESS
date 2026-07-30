@@ -47,7 +47,7 @@ OUT_DIR = os.environ.get(
 # direct (default): 1024-output decoder. cbv: build_decoder(8) + fixed area bases,
 # template = area_basis @ 8-weights. Everything after the template is identical.
 CLEAN_MODE = os.environ.get("CLEAN_MODE", "direct")
-assert CLEAN_MODE in ("direct", "cbv"), CLEAN_MODE
+assert CLEAN_MODE in ("direct", "cbv", "cbv_area_heads"), CLEAN_MODE
 # AREA_CONDITIONED=1 (cbv only): use the area-conditioned weight decoder
 # (decoder_input = concat(latent, area one-hot)) instead of the global one.
 AREA_CONDITIONED = os.environ.get("AREA_CONDITIONED", "0") == "1"
