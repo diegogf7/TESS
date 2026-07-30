@@ -37,6 +37,14 @@ SEED = int(os.environ.get("SEED", "0"))
 
 def main():
     manifest = _require_valid_prepared()
+    # when cleaning with the 64-area-head decoder, confirm the prepared arrays
+    # were actually built that way (kind + head count recorded at prepare time).
+    if os.environ.get("CLEAN_MODE") == "cbv_area_heads":
+        assert manifest.get("decoder_kind") == "area_heads", \
+            f"expected area_heads prepared arrays, got decoder_kind={manifest.get('decoder_kind')}"
+        assert int(manifest.get("n_heads") or 0) > 0, "manifest missing n_heads"
+        print(f"validated area-head cleaning: kind={manifest['decoder_kind']} "
+              f"n_heads={manifest['n_heads']} area_decoder={manifest.get('area_decoder_ckpt')}", flush=True)
     em = np.load(os.path.join(PREP_DIR, "eval_meta.npz"), allow_pickle=True)
     y, tics = em["y"], em["tics"].astype(str)
     present = np.unique(y)

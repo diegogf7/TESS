@@ -41,7 +41,7 @@ from sklearn.metrics import balanced_accuracy_score, recall_score
 from src.data.data import CLASSES, CLASS_TO_IDX
 from src.worked_folder.physics.latent_jepa import build_latent_jepa, jepa_latent_loss
 from src.instrument_v2.fixed_teacher_instrument_jepa import FixedTeacherInstrumentJEPA
-from src.instrument_v2.decode_single_star_k8 import build_decoder
+from src.instrument_v2.decode_single_star_k8 import build_decoder, load_area_decoder, area_one_hot
 from src.instrument_v2.regional_group_teacher import state_hash
 from src.instrument_v2.diagnose_chip_common_signal import normalize_median_mad
 from src.instrument_v2.sector14_dataset import grid_curve_shared, BAD_TESS_MASK
@@ -65,16 +65,23 @@ RAW_CKPT_DIR = os.environ.get("RAW_CKPT_DIR", PHYS_CKPT_DIR)
 OUT_DIR = os.environ.get("OUT_DIR", os.path.join("artifacts", "instrument_v2", "tglc_physics_jepa_ab"))
 PREP_DIR = os.path.join(OUT_DIR, "prepared")
 
-# ---- CBV-weight cleaning (CLEAN_MODE=cbv only) -------------------------------
+# ---- CBV-weight cleaning (CLEAN_MODE=cbv | cbv_area_heads) -------------------
 # direct (default): existing 1024-output decoder, unchanged behaviour.
-# cbv: build_decoder(8) predicts 8 weights; template = area_basis @ weights.
+# cbv: global build_decoder(8) predicts 8 weights; template = area_basis @ weights.
+# cbv_area_heads: 64-area-head decoder picks that area's 8-weight head instead.
 # Everything after the template is identical (subtract_native + one resample).
 CLEAN_MODE = os.environ.get("CLEAN_MODE", "direct")
-assert CLEAN_MODE in ("direct", "cbv"), CLEAN_MODE
 GROUP_ART_DIR = os.environ.get(
     "GROUP_ART_DIR", os.path.join("artifacts", "instrument_v2", "custom_group32_cbv8_mlp_qclean_v1"))
 WEIGHT_DECODER_CKPT = os.environ.get(
     "WEIGHT_DECODER_CKPT", os.path.join(GROUP_ART_DIR, "single_star_weight_decode", "decoder.pth"))
+# cbv_area_heads: route CBV cleaning through the 64-area-head decoder (latent +
+# area one-hot -> that area's 8-weight head), NOT the global 8-weight decoder.
+AREA_DECODER_CKPT = os.environ.get(
+    "AREA_DECODER_CKPT", os.path.join(GROUP_ART_DIR, "single_star_weight_decode_area_heads", "decoder.pth"))
+assert CLEAN_MODE in ("direct", "cbv", "cbv_area_heads"), CLEAN_MODE
+IS_CBV = CLEAN_MODE in ("cbv", "cbv_area_heads")            # both use area CBV bases
+AREA_HEADS = CLEAN_MODE == "cbv_area_heads"
 CBV_BASES_NPZ = os.environ.get("CBV_BASES_NPZ", "")     # explicit path; else unique glob below
 CBV_RANK = 8
 
@@ -86,7 +93,8 @@ EPOCHS = 30
 BATCH_SIZE = 256
 LR = 3e-4
 VAR_WEIGHT = 0.05
-CONFIG_KEYS = ["pretrain_sig", "eval_tglc_sig", "inst_sig", "decoder_sig", "grid_sig", "bad_tess_mask"]
+CONFIG_KEYS = ["pretrain_sig", "eval_tglc_sig", "inst_sig", "decoder_sig", "grid_sig", "bad_tess_mask",
+               "clean_mode", "area_decoder_sig"]
 
 
 # ---- small hashing helpers --------------------------------------------------
@@ -120,7 +128,9 @@ def current_config():
             "phyts_path": PHYTS_PATH, "inst_ckpt": INST_CKPT, "inst_sig": _file_sig(INST_CKPT),
             "decoder_ckpt": DECODER_CKPT, "decoder_sig": _file_sig(DECODER_CKPT),
             "grid_range": GRID_RANGE, "grid_sig": _content_hash(GRID_RANGE),
-            "bad_tess_mask": int(BAD_TESS_MASK), "flux_policy": "raw aperture_flux/flux only"}
+            "bad_tess_mask": int(BAD_TESS_MASK), "flux_policy": "raw aperture_flux/flux only",
+            "clean_mode": CLEAN_MODE,
+            "area_decoder_sig": (_file_sig(AREA_DECODER_CKPT) if AREA_HEADS else None)}
 
 
 def assert_manifest_matches(manifest, current):
@@ -182,28 +192,44 @@ def batched_decode(inst, decoder, Xg, Mg, batch=512):
     return decoded
 
 
-def batched_cbv_templates(inst, wdecoder, Xg, Mg, areas, bases, batch=512):
-    """CLEAN_MODE=cbv: frozen instrument JEPA -> 8 weights -> template =
-    area_basis @ weights, per curve. Returns the SAME (n, 1024) template array
-    batched_decode would, so the rest of build_arms is unchanged. A missing area
-    basis HARD-FAILS -- never a silent raw fallback."""
+def batched_cbv_templates(inst, wdecoder, Xg, Mg, areas, bases, batch=512, a2i=None):
+    """Frozen instrument JEPA -> 8 CBV weights -> template = area_basis @ weights,
+    per curve. Returns the SAME (n, 1024) template array batched_decode would, so
+    the rest of build_arms is unchanged.
+
+    a2i is None (cbv)          : GLOBAL 8-weight decoder on the bare latent.
+    a2i given (cbv_area_heads) : AREA-HEAD decoder -- feed concat(latent, area
+                                 one-hot); its argmax selects that area's head.
+    A missing area basis, or an area unknown to the area-head decoder, HARD-FAILS
+    -- never a silent raw or global fallback."""
     B = np.zeros((len(Xg), GRID, CBV_RANK), np.float32)
+    onehots = np.zeros((len(Xg), len(a2i)), np.float32) if a2i is not None else None
     for i, a in enumerate(areas):
         if int(a) not in bases:
             raise RuntimeError(f"no CBV basis for area {int(a)} -- refusing to fall back to raw")
         B[i] = bases[int(a)]
+        if a2i is not None:
+            onehots[i] = area_one_hot(a2i, int(a))                     # unknown area HARD-FAILS
     templates = np.zeros_like(Xg)
     with torch.no_grad():
         for s in range(0, len(Xg), batch):
             f = torch.tensor(Xg[s:s + batch], dtype=torch.float32, device=DEVICE)
             m = torch.tensor(Mg[s:s + batch], dtype=torch.float32, device=DEVICE)
-            w = wdecoder(inst.encode(f, m, view="predicted"))          # (b, 8)
+            z = inst.encode(f, m, view="predicted")
+            if a2i is None:
+                w = wdecoder(z)                                        # global: (b, 8)
+            else:
+                oh = torch.tensor(onehots[s:s + batch], dtype=torch.float32, device=DEVICE)
+                w = wdecoder(torch.cat([z.reshape(z.shape[0], -1), oh], dim=1))   # area head: (b, 8)
+            assert w.shape[1] == CBV_RANK, f"expected {CBV_RANK} weights/curve, got {w.shape[1]}"
             bb = torch.tensor(B[s:s + batch], dtype=torch.float32, device=DEVICE)
-            templates[s:s + batch] = torch.einsum("bk,blk->bl", w, bb).detach().cpu().numpy()
+            tmpl = torch.einsum("bk,blk->bl", w, bb).detach().cpu().numpy()
+            assert tmpl.shape[1] == GRID, f"template must be {GRID} points, got {tmpl.shape[1]}"
+            templates[s:s + batch] = tmpl
     return templates
 
 
-def build_arms(times, fluxes, inst, decoder, t0, t1, areas=None, bases=None):
+def build_arms(times, fluxes, inst, decoder, t0, t1, areas=None, bases=None, a2i=None):
     """From filtered native (time, flux) lists build matched raw and cleaned
     physics inputs. Decode once (batched), then subtract on native timestamps and
     run the physics preprocessing exactly once per arm.
@@ -220,7 +246,7 @@ def build_arms(times, fluxes, inst, decoder, t0, t1, areas=None, bases=None):
         Xg[i], Mg[i], med[i], scale[i], v = grid_for_instrument(times[i], fluxes[i], t0, t1)
         valids.append(v)
     if bases is not None:
-        decoded = batched_cbv_templates(inst, decoder, Xg, Mg, areas, bases)
+        decoded = batched_cbv_templates(inst, decoder, Xg, Mg, areas, bases, a2i=a2i)
     else:
         decoded = batched_decode(inst, decoder, Xg, Mg)
 
@@ -331,6 +357,11 @@ def stage_prepare(seed):
                     or saved.get("weight_decoder_sig") != _file_sig(WEIGHT_DECODER_CKPT)
                     or saved.get("bases_sig") != _file_sig(_resolve_bases_npz())):
                 raise RuntimeError("cbv weight-decoder or bases changed")
+            if AREA_HEADS and (                        # area-head artifacts + bases
+                    saved.get("clean_mode") != "cbv_area_heads"
+                    or saved.get("area_decoder_sig") != _file_sig(AREA_DECODER_CKPT)
+                    or saved.get("bases_sig") != _file_sig(_resolve_bases_npz())):
+                raise RuntimeError("area-head decoder or bases changed")
             print("prepared data already valid; ensuring per-seed init only", flush=True)
             _ensure_init(seed)
             return
@@ -375,8 +406,18 @@ def stage_prepare(seed):
                        torch.load(INST_CKPT, map_location=DEVICE)).eval()
     for p in inst.parameters():
         p.requires_grad_(False)
-    # direct: 1024-output decoder. cbv: build_decoder(8) + fixed area bases.
-    if CLEAN_MODE == "cbv":
+    # direct: 1024-output decoder. cbv: global build_decoder(8). cbv_area_heads:
+    # 64-area-head decoder (latent + area one-hot -> that area's 8-weight head).
+    a2i = None
+    if CLEAN_MODE == "cbv_area_heads":
+        decoder, a2i, kind = load_area_decoder(AREA_DECODER_CKPT, DEVICE)
+        if kind != "area_heads":
+            raise RuntimeError(f"expected an area_heads decoder at {AREA_DECODER_CKPT}, got kind={kind}")
+        bases = _load_bases(_resolve_bases_npz())
+        pre_areas = _areas_for(pre)
+        print(f"CBV AREA-HEAD cleaning: {len(a2i)} heads x {len(bases)} area bases, "
+              f"decoder {AREA_DECODER_CKPT} ({_resolve_bases_npz()})", flush=True)
+    elif CLEAN_MODE == "cbv":
         decoder = strict_load(build_decoder(CBV_RANK).to(DEVICE),
                               torch.load(WEIGHT_DECODER_CKPT, map_location=DEVICE)).eval()
         bases = _load_bases(_resolve_bases_npz())
@@ -395,14 +436,14 @@ def stage_prepare(seed):
     # --- build matched arms (pretrain + eval) --------------------------------
     print("building pretraining arms...", flush=True)
     pre_raw_X, pre_raw_M, pre_cln_X, pre_cln_M = build_arms(
-        pre_times, pre_fluxes, inst, decoder, t0, t1, pre_areas, bases)
+        pre_times, pre_fluxes, inst, decoder, t0, t1, pre_areas, bases, a2i)
     eval_times, eval_fluxes, matched2 = _filter_curves(matched, min_good=1)
     if len(matched2) != EXPECTED_N_EVAL:
         raise RuntimeError("an eval curve was dropped by the min-good filter")
-    eval_areas = _areas_for(matched2) if CLEAN_MODE == "cbv" else None
+    eval_areas = _areas_for(matched2) if IS_CBV else None
     print("building evaluation arms...", flush=True)
     ev_raw_X, ev_raw_M, ev_cln_X, ev_cln_M = build_arms(
-        eval_times, eval_fluxes, inst, decoder, t0, t1, eval_areas, bases)
+        eval_times, eval_fluxes, inst, decoder, t0, t1, eval_areas, bases, a2i)
 
     inst_after = (state_hash(inst.teacher), state_hash(inst.student),
                   state_hash(inst.predictor), state_hash(decoder))
@@ -439,10 +480,15 @@ def stage_prepare(seed):
                 "exclusion_hash": exclusion_hash,
                 "instrument_decoder_unchanged": True,
                 "clean_mode": CLEAN_MODE,
+                "decoder_kind": ("area_heads" if AREA_HEADS else
+                                 ("cbv_global" if CLEAN_MODE == "cbv" else "direct")),
                 "weight_decoder_sig": (_file_sig(WEIGHT_DECODER_CKPT) if CLEAN_MODE == "cbv" else None),
                 "weight_decoder_ckpt": (WEIGHT_DECODER_CKPT if CLEAN_MODE == "cbv" else None),
-                "bases_sig": (_file_sig(_resolve_bases_npz()) if CLEAN_MODE == "cbv" else None),
-                "bases_npz": (_resolve_bases_npz() if CLEAN_MODE == "cbv" else None),
+                "area_decoder_ckpt": (AREA_DECODER_CKPT if AREA_HEADS else None),
+                "area_decoder_sig": (_file_sig(AREA_DECODER_CKPT) if AREA_HEADS else None),
+                "n_heads": (len(a2i) if AREA_HEADS else None),
+                "bases_sig": (_file_sig(_resolve_bases_npz()) if IS_CBV else None),
+                "bases_npz": (_resolve_bases_npz() if IS_CBV else None),
                 "quality_filter": {"bad_tess_mask": int(BAD_TESS_MASK), "tglc_flags": "== 0",
                                    "finite": True, "min_good_pretrain": MIN_GOOD}}
     with open(manifest_path, "w") as fh:
@@ -836,6 +882,8 @@ def main():
           f"RAW_CKPT_DIR={RAW_CKPT_DIR}", flush=True)
     if CLEAN_MODE == "cbv":
         print(f"  WEIGHT_DECODER_CKPT={WEIGHT_DECODER_CKPT}", flush=True)
+    elif AREA_HEADS:
+        print(f"  AREA_DECODER_CKPT={AREA_DECODER_CKPT}", flush=True)
 
     if args.stage == "prepare":
         stage_prepare(args.seed)
