@@ -43,6 +43,7 @@ CBV_RANK = int(os.environ.get("CBV_RANK", "8"))
 MIN_VALID_STARS = int(os.environ.get("MIN_VALID_STARS", "16"))
 assert 1 <= MIN_VALID_STARS <= GROUP_SIZE, (MIN_VALID_STARS, GROUP_SIZE)
 N_CONTEXT = int(os.environ.get("N_CONTEXT", "1000"))         # context stars per area per epoch
+REQUIRE_FULL = os.environ.get("REQUIRE_FULL", "1").lower() not in ("0", "false", "no")  # 0 = keep areas < N_CONTEXT (use min(N_CONTEXT, available))
 EPOCHS = int(os.environ.get("EPOCHS", "15"))
 LR = float(os.environ.get("LR", "1e-3"))
 VARW = float(os.environ.get("VARW", "0.5"))
@@ -125,13 +126,17 @@ def main():
 
     train_ds = DynamicAreaGroupDataset(base_train.X, base_train.M, base_train.areas, base_train.tics,
                                        bases, GROUP_SIZE, MIN_VALID_STARS, RIDGE_LAMBDA,
-                                       n_context=N_CONTEXT, seed=SEED, resample=True)
+                                       n_context=N_CONTEXT, seed=SEED, resample=True,
+                                       require_full=REQUIRE_FULL)
     val_ds = DynamicAreaGroupDataset(base_val.X, base_val.M, base_val.areas, base_val.tics,
                                      bases, GROUP_SIZE, MIN_VALID_STARS, RIDGE_LAMBDA,
                                      n_context=None, seed=SEED, resample=False)   # fixed deterministic val
-    print(f"train eligible areas (>= {N_CONTEXT} stars): {len(train_ds.eligible)} "
-          f"-> {len(train_ds)} context examples/epoch", flush=True)
-    print(f"train EXCLUDED areas (< {N_CONTEXT} stars): {len(train_ds.excluded)} "
+    floor = N_CONTEXT if REQUIRE_FULL else GROUP_SIZE + 1
+    print(f"REQUIRE_FULL={REQUIRE_FULL} -> area eligibility floor: >= {floor} stars", flush=True)
+    print(f"train eligible areas: {len(train_ds.eligible)} "
+          f"-> {len(train_ds)} context examples/epoch "
+          f"({'exactly' if REQUIRE_FULL else 'up to'} {N_CONTEXT}/area)", flush=True)
+    print(f"train EXCLUDED areas (< {floor} stars): {len(train_ds.excluded)} "
           f"{train_ds.excluded}", flush=True)
     print(f"val eligible areas: {len(val_ds.eligible)} -> {len(val_ds)} fixed examples", flush=True)
     with open(os.path.join(ART_DIR, f"area_eligibility_{tag}.json"), "w") as fh:
@@ -186,7 +191,8 @@ def main():
         print(f"epoch {epoch:02d}: train={train_loss:.5f} val={val_loss:.5f} "
               f"teacher_ok={hash_ok} n={len(train_ds)}{marker}", flush=True)
 
-    selection = {"tag": tag, "seed": SEED, "n_context": N_CONTEXT, "group_size": GROUP_SIZE,
+    selection = {"tag": tag, "seed": SEED, "n_context": N_CONTEXT, "require_full": REQUIRE_FULL,
+                 "n_train_areas": len(train_ds.eligible), "group_size": GROUP_SIZE,
                  "cbv_rank": CBV_RANK, "min_valid": MIN_VALID_STARS, "ridge_lambda": RIDGE_LAMBDA,
                  "epochs": EPOCHS, "lr": LR, "var_weight": VARW, "batch": BATCH,
                  "select_metric": "min predicted-latent validation loss", "best": best,

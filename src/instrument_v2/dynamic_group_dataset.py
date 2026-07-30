@@ -24,7 +24,7 @@ from src.instrument_v2.regional_cbv import ridge_reconstruct
 
 class DynamicAreaGroupDataset(Dataset):
     def __init__(self, X, M, areas, tics, area_bases, group_size, min_valid,
-                 ridge_lambda, n_context=1000, seed=0, resample=True):
+                 ridge_lambda, n_context=1000, seed=0, resample=True, require_full=True):
         self.X, self.M = X, M
         self.areas = np.asarray(areas, dtype=np.int64)
         self.tics = np.asarray(tics, dtype=str)
@@ -35,6 +35,7 @@ class DynamicAreaGroupDataset(Dataset):
         self.n_context = None if n_context is None else int(n_context)
         self.base_seed = int(seed)
         self.resample = bool(resample)
+        self.require_full = bool(require_full)
 
         # area -> deterministic sorted row indices into X/M
         rows_by_area = {}
@@ -43,9 +44,11 @@ class DynamicAreaGroupDataset(Dataset):
         self.area_rows = {a: np.asarray(sorted(r), dtype=np.int64)
                           for a, r in rows_by_area.items()}
 
-        # an area is eligible only if it has a CBV basis AND enough stars: at
-        # least n_context distinct contexts (train) or group_size+1 (val).
-        need = (self.group_size + 1 if self.n_context is None
+        # an area is eligible only if it has a CBV basis AND enough stars. With
+        # require_full it must supply n_context DISTINCT contexts; without it,
+        # any area with >= group_size+1 stars is kept and simply contributes
+        # min(n_context, available) contexts (no duplication).
+        need = (self.group_size + 1 if (self.n_context is None or not self.require_full)
                 else max(self.n_context, self.group_size + 1))
         self.eligible = sorted(a for a, r in self.area_rows.items()
                                if a in area_bases and len(r) >= need)
@@ -66,7 +69,8 @@ class DynamicAreaGroupDataset(Dataset):
             if self.n_context is None:
                 ctx = rows                                             # all stars, fixed order (val)
             else:
-                ctx = rng.choice(rows, size=self.n_context, replace=False)   # 1000 distinct contexts
+                k = self.n_context if self.require_full else min(self.n_context, len(rows))
+                ctx = rng.choice(rows, size=k, replace=False)          # up to n_context distinct contexts
             for c in ctx:
                 others = rows[rows != c]                              # context excluded
                 g = rng.choice(others, size=self.group_size, replace=False)  # 32 distinct others
@@ -89,7 +93,9 @@ class DynamicAreaGroupDataset(Dataset):
         for a in self.eligible:
             ctx = per_area.get(a, [])
             if self.n_context is not None:
-                assert len(ctx) == self.n_context, (a, len(ctx))   # exactly 1000
+                expected = (self.n_context if self.require_full
+                            else min(self.n_context, len(self.area_rows[a])))
+                assert len(ctx) == expected, (a, len(ctx), expected)
             assert len(set(ctx)) == len(ctx), "duplicate context star in area"
         return True
 
