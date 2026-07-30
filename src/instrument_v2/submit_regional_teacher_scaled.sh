@@ -25,6 +25,7 @@ export CBV_RANK=${CBV_RANK:-8}
 export MIN_VALID_STARS=${MIN_VALID_STARS:-16}
 export N_STARS=${N_STARS:-1000}
 export N_PAIRS=${N_PAIRS:-1000}
+export REQUIRE_FULL=${REQUIRE_FULL:-1}       # 0 = use all available stars/area (no 1000 floor)
 export EPOCHS=${EPOCHS:-20}
 DENSE_V2=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_cadence_s14_dense_v2.parquet
 export S14_DATA=${S14_DATA:-$DENSE_V2}
