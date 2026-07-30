@@ -40,6 +40,7 @@ CBV_RANK = int(os.environ.get("CBV_RANK", "8"))
 MIN_VALID_STARS = int(os.environ.get("MIN_VALID_STARS", "16"))
 N_STARS = int(os.environ.get("N_STARS", "1000"))            # exactly this many stars per area
 N_PAIRS = int(os.environ.get("N_PAIRS", "1000"))            # pairs per area per epoch
+REQUIRE_FULL = os.environ.get("REQUIRE_FULL", "1").lower() not in ("0", "false", "no")  # 0 = use all available stars/area (no 1000 floor)
 N_PAIRS_VAL = int(os.environ.get("N_PAIRS_VAL", "200"))     # fixed deterministic validation pairs/area
 EPOCHS = int(os.environ.get("EPOCHS", "20"))               # exactly 20, no early stopping
 LR = float(os.environ.get("LR", "1e-3"))
@@ -106,6 +107,7 @@ def main():
     print(f"  tag         : {tag}", flush=True)
     print(f"  GROUP/RANK/MINVALID : {GROUP_SIZE}/{CBV_RANK}/{MIN_VALID_STARS}", flush=True)
     print(f"  N_STARS/N_PAIRS/EPOCHS: {N_STARS}/{N_PAIRS}/{EPOCHS} (no early stop)", flush=True)
+    print(f"  REQUIRE_FULL: {REQUIRE_FULL}  ({'exactly N_STARS/area, hard-fail if short' if REQUIRE_FULL else 'use ALL available stars/area, drop areas < 64'})", flush=True)
     print(f"  S14_DATA    : {S14_DATA}", flush=True)
     print(f"  ART/CKPT    : {ART_DIR} | {CKPT_DIR}", flush=True)
     print("========================================================", flush=True)
@@ -137,7 +139,7 @@ def main():
     train_pairs = DynamicAreaPairDataset(base_train.X, base_train.M, base_train.areas, base_train.tics,
                                          bases, GROUP_SIZE, MIN_VALID_STARS, RIDGE_LAMBDA,
                                          n_stars=N_STARS, n_pairs=N_PAIRS, seed=SEED,
-                                         resample=True, require_full=True)   # HARD-FAILS if any area < N_STARS
+                                         resample=True, require_full=REQUIRE_FULL)   # REQUIRE_FULL=0 -> use all available stars/area
     val_pairs = DynamicAreaPairDataset(base_val.X, base_val.M, base_val.areas, base_val.tics,
                                        bases, GROUP_SIZE, MIN_VALID_STARS, RIDGE_LAMBDA,
                                        n_stars=N_STARS, n_pairs=N_PAIRS_VAL, seed=SEED,
@@ -191,7 +193,7 @@ def main():
               f"area={area_bacc:.4f} erank={erank:.1f} ema_moving={ema_moving}{marker}", flush=True)
 
     selection = {"tag": tag, "seed": SEED, "group_size": GROUP_SIZE, "cbv_rank": CBV_RANK,
-                 "min_valid": MIN_VALID_STARS, "n_stars_per_area": N_STARS,
+                 "min_valid": MIN_VALID_STARS, "require_full": REQUIRE_FULL, "n_stars_per_area": N_STARS,
                  "n_pairs_per_area_per_epoch": N_PAIRS, "epochs": EPOCHS,
                  "lr": LR, "var_weight": VARW, "batch": BATCH, "ridge_lambda": RIDGE_LAMBDA,
                  "best": best, "checkpoint": f"{ckpt_base}_best.pth",
