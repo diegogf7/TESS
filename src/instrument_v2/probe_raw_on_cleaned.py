@@ -47,11 +47,14 @@ def main():
     if not os.path.exists(ck):
         raise RuntimeError(f"missing raw physics JEPA {ck}; train the raw arm first")
     state = torch.load(ck, map_location=DEVICE)
-    # the raw arm may have been trained with a wider d_model than build_latent_jepa's
-    # current hardcoded default (256) -- infer it from the checkpoint so strict load
-    # matches whatever width the raw encoder actually used.
-    d_model = int(state["context_encoder.decoder.weight"].shape[1])
-    print(f"raw JEPA d_model inferred from checkpoint: {d_model}", flush=True)
+    # self-configure the arch from the checkpoint so strict load matches whatever
+    # the raw arm was trained with: encoder.weight is [d_model, d_input]; the
+    # decoder in-features are 2*d_model iff the arm used readout="mean_std"
+    # (mean+std pooling), else d_model.
+    d_model = int(state["context_encoder.encoder.weight"].shape[0])
+    dec_in = int(state["context_encoder.decoder.weight"].shape[1])
+    readout = "mean_std" if dec_in == 2 * d_model else os.environ.get("JEPA_READOUT", "mean")
+    print(f"raw JEPA arch inferred from checkpoint: d_model={d_model} readout={readout}", flush=True)
     model = LatentJEPA(
         grid_length=1024,
         n_tokens=int(os.environ.get("JEPA_NTOKENS", "16")),
@@ -59,7 +62,7 @@ def main():
         d_model=d_model, n_layers=4, dropout=0.2,
         mask_ratio=float(os.environ.get("JEPA_MASK_RATIO", "0.5")),
         momentum=0.996,
-        readout=os.environ.get("JEPA_READOUT", "mean"),
+        readout=readout,
         predictor=os.environ.get("JEPA_PREDICTOR", "transformer"),
     ).to(DEVICE)
     model.load_state_dict(state, strict=True)
