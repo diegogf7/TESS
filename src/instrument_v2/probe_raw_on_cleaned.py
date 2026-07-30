@@ -26,7 +26,7 @@ import numpy as np
 import torch
 from sklearn.model_selection import GroupShuffleSplit
 
-from src.worked_folder.physics.latent_jepa import build_latent_jepa
+from src.worked_folder.physics.latent_jepa import LatentJEPA
 from src.instrument_v2.eval_phyts_instrument_ab import DEVICE, encode_physics
 from src.instrument_v2.run_tglc_physics_jepa_ab import (
     PREP_DIR, OUT_DIR, RAW_CKPT_DIR, CLASSES, _classify, _require_valid_prepared,
@@ -46,8 +46,23 @@ def main():
     ck = os.path.join(RAW_CKPT_DIR, f"physics_jepa_raw_s{SEED}_best.pth")
     if not os.path.exists(ck):
         raise RuntimeError(f"missing raw physics JEPA {ck}; train the raw arm first")
-    model = build_latent_jepa().to(DEVICE)
-    model.load_state_dict(torch.load(ck, map_location=DEVICE), strict=True)
+    state = torch.load(ck, map_location=DEVICE)
+    # the raw arm may have been trained with a wider d_model than build_latent_jepa's
+    # current hardcoded default (256) -- infer it from the checkpoint so strict load
+    # matches whatever width the raw encoder actually used.
+    d_model = int(state["context_encoder.decoder.weight"].shape[1])
+    print(f"raw JEPA d_model inferred from checkpoint: {d_model}", flush=True)
+    model = LatentJEPA(
+        grid_length=1024,
+        n_tokens=int(os.environ.get("JEPA_NTOKENS", "16")),
+        token_dim=int(os.environ.get("JEPA_TOKENDIM", "16")),
+        d_model=d_model, n_layers=4, dropout=0.2,
+        mask_ratio=float(os.environ.get("JEPA_MASK_RATIO", "0.5")),
+        momentum=0.996,
+        readout=os.environ.get("JEPA_READOUT", "mean"),
+        predictor=os.environ.get("JEPA_PREDICTOR", "transformer"),
+    ).to(DEVICE)
+    model.load_state_dict(state, strict=True)
     model.eval()
     for p in model.parameters():
         p.requires_grad_(False)
