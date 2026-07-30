@@ -53,8 +53,16 @@ def main():
     df = ensure_area_column(df)
     train_tics, val_tics, test_tics = ensure_splits(SPLIT_DIR, BASE_ART_DIR)
     t_range = ensure_time_range(BASE_ART_DIR, df, train_tics)
-    val_ds = Sector14GroupStatDataset(df, val_tics, t_range, "area", GROUP_SIZE, min_valid=MIN_VALID_STARS)
-    assert not set(val_ds.tics) & test_tics, "test TIC leaked into validation"
+    eval_split = os.environ.get("EVAL_SPLIT", "val").lower()
+    if eval_split not in ("val", "test"):
+        raise ValueError(f"EVAL_SPLIT must be val|test, got {eval_split!r}")
+    suffix = "" if eval_split == "val" else f"_{eval_split}"
+    eval_tics = val_tics if eval_split == "val" else test_tics
+    print(f"EVAL_SPLIT={eval_split}: scoring on {len(eval_tics)} {eval_split} stars", flush=True)
+    val_ds = Sector14GroupStatDataset(df, eval_tics, t_range, "area", GROUP_SIZE, min_valid=MIN_VALID_STARS)
+    forbidden = test_tics if eval_split == "val" else train_tics
+    assert not set(val_ds.tics) & forbidden, \
+        f"{'test' if eval_split == 'val' else 'train'} TIC leaked into {eval_split}"
 
     bases = load_bases_npz(_resolve_bases())
     model = FixedTeacherInstrumentJEPA(n_tokens=16, token_dim=16, d_model=256, n_layers=4,
@@ -87,7 +95,7 @@ def main():
     pe = pd.DataFrame(rows)
     if pe.empty:
         raise RuntimeError("no scorable validation examples")
-    pe.to_csv(os.path.join(OUT_DIR, "dynamic_area_heads_per_example.csv"), index=False)
+    pe.to_csv(os.path.join(OUT_DIR, f"dynamic_area_heads_per_example{suffix}.csv"), index=False)
 
     def block(g):
         return {"n": int(len(g)),
@@ -97,12 +105,12 @@ def main():
                 "neg_pearson_rate_pct": round(100.0 * float((g["pearson"] < 0).mean()), 3)}
 
     report = {"encoder_ckpt": STAGE_B_CKPT, "area_decoder": AREA_DECODER, "decoder_kind": kind,
-              "n_val_examples": int(len(pe)),
+              "eval_split": eval_split, "n_examples": int(len(pe)),
               "overall": block(pe),
               "by_camera": {int(cam): block(g) for cam, g in pe.groupby("camera")},
               "select_metric": "validation Q1 Pearson + negative-Pearson rate",
               "frozen_hashes_unchanged": True, "git_commit": git_commit()}
-    with open(os.path.join(OUT_DIR, "dynamic_area_heads_summary.json"), "w") as fh:
+    with open(os.path.join(OUT_DIR, f"dynamic_area_heads_summary{suffix}.json"), "w") as fh:
         json.dump(report, fh, indent=2)
 
     o = report["overall"]
