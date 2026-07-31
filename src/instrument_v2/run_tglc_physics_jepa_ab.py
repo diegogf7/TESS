@@ -42,6 +42,7 @@ from src.data.data import CLASSES, CLASS_TO_IDX
 from src.worked_folder.physics.latent_jepa import build_latent_jepa, jepa_latent_loss
 from src.instrument_v2.fixed_teacher_instrument_jepa import FixedTeacherInstrumentJEPA
 from src.instrument_v2.decode_single_star_k8 import build_decoder, load_area_decoder, area_one_hot
+from src.shared_s4d.model import build_model as build_shared_model
 from src.instrument_v2.regional_group_teacher import state_hash
 from src.instrument_v2.diagnose_chip_common_signal import normalize_median_mad
 from src.instrument_v2.sector14_dataset import grid_curve_shared, BAD_TESS_MASK
@@ -79,9 +80,13 @@ WEIGHT_DECODER_CKPT = os.environ.get(
 # area one-hot -> that area's 8-weight head), NOT the global 8-weight decoder.
 AREA_DECODER_CKPT = os.environ.get(
     "AREA_DECODER_CKPT", os.path.join(GROUP_ART_DIR, "single_star_weight_decode_area_heads", "decoder.pth"))
-assert CLEAN_MODE in ("direct", "cbv", "cbv_area_heads"), CLEAN_MODE
+# learned: shared-S4D autoencoder that predicts the 1024 systematics DIRECTLY from
+# one curve (no instrument JEPA, no CBV bases). LEARNED_CKPT = its _best.pth.
+LEARNED_CKPT = os.environ.get("LEARNED_CKPT", "")
+assert CLEAN_MODE in ("direct", "cbv", "cbv_area_heads", "learned"), CLEAN_MODE
 IS_CBV = CLEAN_MODE in ("cbv", "cbv_area_heads")            # both use area CBV bases
 AREA_HEADS = CLEAN_MODE == "cbv_area_heads"
+LEARNED = CLEAN_MODE == "learned"
 CBV_BASES_NPZ = os.environ.get("CBV_BASES_NPZ", "")     # explicit path; else unique glob below
 CBV_RANK = 8
 
@@ -94,11 +99,13 @@ BATCH_SIZE = 256
 LR = 3e-4
 VAR_WEIGHT = 0.05
 CONFIG_KEYS = ["pretrain_sig", "eval_tglc_sig", "inst_sig", "decoder_sig", "grid_sig", "bad_tess_mask",
-               "clean_mode", "area_decoder_sig"]
+               "clean_mode", "area_decoder_sig", "learned_sig"]
 
 
 # ---- small hashing helpers --------------------------------------------------
 def _file_sig(path):
+    if not path or not os.path.exists(path):     # learned mode ignores the instrument/CBV paths
+        return None
     return hashlib.sha256(f"{os.path.abspath(path)}|{os.stat(path).st_size}".encode()).hexdigest()[:16]
 
 
@@ -130,7 +137,8 @@ def current_config():
             "grid_range": GRID_RANGE, "grid_sig": _content_hash(GRID_RANGE),
             "bad_tess_mask": int(BAD_TESS_MASK), "flux_policy": "raw aperture_flux/flux only",
             "clean_mode": CLEAN_MODE,
-            "area_decoder_sig": (_file_sig(AREA_DECODER_CKPT) if AREA_HEADS else None)}
+            "area_decoder_sig": (_file_sig(AREA_DECODER_CKPT) if AREA_HEADS else None),
+            "learned_sig": (_file_sig(LEARNED_CKPT) if LEARNED else None)}
 
 
 def assert_manifest_matches(manifest, current):
@@ -229,7 +237,23 @@ def batched_cbv_templates(inst, wdecoder, Xg, Mg, areas, bases, batch=512, a2i=N
     return templates
 
 
-def build_arms(times, fluxes, inst, decoder, t0, t1, areas=None, bases=None, a2i=None):
+def batched_learned_templates(model, Xg, Mg, batch=512):
+    """CLEAN_MODE=learned: shared-S4D autoencoder predicts the 1024-cadence
+    systematics DIRECTLY from each single curve (no instrument JEPA, no CBV
+    bases). Returns the SAME (n, 1024) template array batched_decode would."""
+    templates = np.zeros_like(Xg)
+    with torch.no_grad():
+        for s in range(0, len(Xg), batch):
+            x = torch.tensor(Xg[s:s + batch], dtype=torch.float32, device=DEVICE)
+            m = torch.tensor(Mg[s:s + batch], dtype=torch.float32, device=DEVICE)
+            s_hat, _ = model(x, m)
+            assert s_hat.shape[1] == GRID, f"expected {GRID}-pt systematics, got {s_hat.shape[1]}"
+            templates[s:s + batch] = s_hat.detach().cpu().numpy()
+    return templates
+
+
+def build_arms(times, fluxes, inst, decoder, t0, t1, areas=None, bases=None, a2i=None,
+               learned_model=None):
     """From filtered native (time, flux) lists build matched raw and cleaned
     physics inputs. Decode once (batched), then subtract on native timestamps and
     run the physics preprocessing exactly once per arm.
@@ -245,7 +269,9 @@ def build_arms(times, fluxes, inst, decoder, t0, t1, areas=None, bases=None, a2i
     for i in range(n):
         Xg[i], Mg[i], med[i], scale[i], v = grid_for_instrument(times[i], fluxes[i], t0, t1)
         valids.append(v)
-    if bases is not None:
+    if learned_model is not None:
+        decoded = batched_learned_templates(learned_model, Xg, Mg)
+    elif bases is not None:
         decoded = batched_cbv_templates(inst, decoder, Xg, Mg, areas, bases, a2i=a2i)
     else:
         decoded = batched_decode(inst, decoder, Xg, Mg)
@@ -362,6 +388,10 @@ def stage_prepare(seed):
                     or saved.get("area_decoder_sig") != _file_sig(AREA_DECODER_CKPT)
                     or saved.get("bases_sig") != _file_sig(_resolve_bases_npz())):
                 raise RuntimeError("area-head decoder or bases changed")
+            if LEARNED and (                           # shared-S4D cleaner
+                    saved.get("clean_mode") != "learned"
+                    or saved.get("learned_sig") != _file_sig(LEARNED_CKPT)):
+                raise RuntimeError("learned model changed")
             print("prepared data already valid; ensuring per-seed init only", flush=True)
             _ensure_init(seed)
             return
@@ -400,55 +430,69 @@ def stage_prepare(seed):
     pre_times, pre_fluxes, pre = _filter_curves(pre, MIN_GOOD)
     print(f"pretrain curves after quality/min-good filter: {len(pre)}", flush=True)
 
-    # --- frozen instrument + decoder -----------------------------------------
-    inst = strict_load(FixedTeacherInstrumentJEPA(n_tokens=16, token_dim=16, d_model=256, n_layers=4,
-                                                  readout="mean", predictor_type="mlp").to(DEVICE),
-                       torch.load(INST_CKPT, map_location=DEVICE)).eval()
-    for p in inst.parameters():
-        p.requires_grad_(False)
-    # direct: 1024-output decoder. cbv: global build_decoder(8). cbv_area_heads:
-    # 64-area-head decoder (latent + area one-hot -> that area's 8-weight head).
-    a2i = None
-    if CLEAN_MODE == "cbv_area_heads":
-        decoder, a2i, kind = load_area_decoder(AREA_DECODER_CKPT, DEVICE)
-        if kind != "area_heads":
-            raise RuntimeError(f"expected an area_heads decoder at {AREA_DECODER_CKPT}, got kind={kind}")
-        bases = _load_bases(_resolve_bases_npz())
-        pre_areas = _areas_for(pre)
-        print(f"CBV AREA-HEAD cleaning: {len(a2i)} heads x {len(bases)} area bases, "
-              f"decoder {AREA_DECODER_CKPT} ({_resolve_bases_npz()})", flush=True)
-    elif CLEAN_MODE == "cbv":
-        decoder = strict_load(build_decoder(CBV_RANK).to(DEVICE),
-                              torch.load(WEIGHT_DECODER_CKPT, map_location=DEVICE)).eval()
-        bases = _load_bases(_resolve_bases_npz())
-        pre_areas = _areas_for(pre)
-        print(f"CBV cleaning: {CBV_RANK} weights x {len(bases)} area bases "
-              f"({_resolve_bases_npz()})", flush=True)
+    # --- frozen cleaner ------------------------------------------------------
+    # learned: shared-S4D autoencoder ONLY (no instrument JEPA / no CBV decoder).
+    inst = decoder = learned_model = bases = pre_areas = a2i = None
+    if LEARNED:
+        if not LEARNED_CKPT or not os.path.exists(LEARNED_CKPT):
+            raise RuntimeError(f"CLEAN_MODE=learned needs LEARNED_CKPT; got {LEARNED_CKPT!r}")
+        lck = torch.load(LEARNED_CKPT, map_location=DEVICE)
+        learned_model = build_shared_model().to(DEVICE)
+        learned_model.load_state_dict(lck["model"] if isinstance(lck, dict) and "model" in lck else lck)
+        learned_model.eval()
+        for p in learned_model.parameters():
+            p.requires_grad_(False)
+        frozen_before = state_hash(learned_model)
+        print(f"LEARNED cleaning: shared-S4D autoencoder {LEARNED_CKPT} "
+              f"(direct 1024 systematics per curve)", flush=True)
     else:
-        decoder = strict_load(build_decoder(1024).to(DEVICE),
-                              torch.load(DECODER_CKPT, map_location=DEVICE)).eval()
-        bases = pre_areas = None
-    for p in decoder.parameters():
-        p.requires_grad_(False)
-    inst_before = (state_hash(inst.teacher), state_hash(inst.student),
-                   state_hash(inst.predictor), state_hash(decoder))
+        inst = strict_load(FixedTeacherInstrumentJEPA(n_tokens=16, token_dim=16, d_model=256, n_layers=4,
+                                                      readout="mean", predictor_type="mlp").to(DEVICE),
+                           torch.load(INST_CKPT, map_location=DEVICE)).eval()
+        for p in inst.parameters():
+            p.requires_grad_(False)
+        # direct: 1024-output decoder. cbv: global build_decoder(8). cbv_area_heads:
+        # 64-area-head decoder (latent + area one-hot -> that area's 8-weight head).
+        if CLEAN_MODE == "cbv_area_heads":
+            decoder, a2i, kind = load_area_decoder(AREA_DECODER_CKPT, DEVICE)
+            if kind != "area_heads":
+                raise RuntimeError(f"expected an area_heads decoder at {AREA_DECODER_CKPT}, got kind={kind}")
+            bases = _load_bases(_resolve_bases_npz())
+            pre_areas = _areas_for(pre)
+            print(f"CBV AREA-HEAD cleaning: {len(a2i)} heads x {len(bases)} area bases, "
+                  f"decoder {AREA_DECODER_CKPT} ({_resolve_bases_npz()})", flush=True)
+        elif CLEAN_MODE == "cbv":
+            decoder = strict_load(build_decoder(CBV_RANK).to(DEVICE),
+                                  torch.load(WEIGHT_DECODER_CKPT, map_location=DEVICE)).eval()
+            bases = _load_bases(_resolve_bases_npz())
+            pre_areas = _areas_for(pre)
+            print(f"CBV cleaning: {CBV_RANK} weights x {len(bases)} area bases "
+                  f"({_resolve_bases_npz()})", flush=True)
+        else:
+            decoder = strict_load(build_decoder(1024).to(DEVICE),
+                                  torch.load(DECODER_CKPT, map_location=DEVICE)).eval()
+        for p in decoder.parameters():
+            p.requires_grad_(False)
+        frozen_before = (state_hash(inst.teacher), state_hash(inst.student),
+                         state_hash(inst.predictor), state_hash(decoder))
 
     # --- build matched arms (pretrain + eval) --------------------------------
     print("building pretraining arms...", flush=True)
     pre_raw_X, pre_raw_M, pre_cln_X, pre_cln_M = build_arms(
-        pre_times, pre_fluxes, inst, decoder, t0, t1, pre_areas, bases, a2i)
+        pre_times, pre_fluxes, inst, decoder, t0, t1, pre_areas, bases, a2i, learned_model)
     eval_times, eval_fluxes, matched2 = _filter_curves(matched, min_good=1)
     if len(matched2) != EXPECTED_N_EVAL:
         raise RuntimeError("an eval curve was dropped by the min-good filter")
     eval_areas = _areas_for(matched2) if IS_CBV else None
     print("building evaluation arms...", flush=True)
     ev_raw_X, ev_raw_M, ev_cln_X, ev_cln_M = build_arms(
-        eval_times, eval_fluxes, inst, decoder, t0, t1, eval_areas, bases, a2i)
+        eval_times, eval_fluxes, inst, decoder, t0, t1, eval_areas, bases, a2i, learned_model)
 
-    inst_after = (state_hash(inst.teacher), state_hash(inst.student),
-                  state_hash(inst.predictor), state_hash(decoder))
-    if inst_before != inst_after:
-        raise RuntimeError("instrument/decoder changed during preparation")
+    frozen_after = (state_hash(learned_model) if LEARNED else
+                    (state_hash(inst.teacher), state_hash(inst.student),
+                     state_hash(inst.predictor), state_hash(decoder)))
+    if frozen_before != frozen_after:
+        raise RuntimeError("cleaner model changed during preparation")
 
     # --- one deterministic TIC-disjoint pretraining/validation split ---------
     pre_tics = pre["TIC"].to_numpy().astype(str)
@@ -480,13 +524,15 @@ def stage_prepare(seed):
                 "exclusion_hash": exclusion_hash,
                 "instrument_decoder_unchanged": True,
                 "clean_mode": CLEAN_MODE,
-                "decoder_kind": ("area_heads" if AREA_HEADS else
+                "decoder_kind": ("learned_s4d" if LEARNED else "area_heads" if AREA_HEADS else
                                  ("cbv_global" if CLEAN_MODE == "cbv" else "direct")),
                 "weight_decoder_sig": (_file_sig(WEIGHT_DECODER_CKPT) if CLEAN_MODE == "cbv" else None),
                 "weight_decoder_ckpt": (WEIGHT_DECODER_CKPT if CLEAN_MODE == "cbv" else None),
                 "area_decoder_ckpt": (AREA_DECODER_CKPT if AREA_HEADS else None),
                 "area_decoder_sig": (_file_sig(AREA_DECODER_CKPT) if AREA_HEADS else None),
                 "n_heads": (len(a2i) if AREA_HEADS else None),
+                "learned_ckpt": (LEARNED_CKPT if LEARNED else None),
+                "learned_sig": (_file_sig(LEARNED_CKPT) if LEARNED else None),
                 "bases_sig": (_file_sig(_resolve_bases_npz()) if IS_CBV else None),
                 "bases_npz": (_resolve_bases_npz() if IS_CBV else None),
                 "quality_filter": {"bad_tess_mask": int(BAD_TESS_MASK), "tglc_flags": "== 0",
@@ -884,6 +930,8 @@ def main():
         print(f"  WEIGHT_DECODER_CKPT={WEIGHT_DECODER_CKPT}", flush=True)
     elif AREA_HEADS:
         print(f"  AREA_DECODER_CKPT={AREA_DECODER_CKPT}", flush=True)
+    elif LEARNED:
+        print(f"  LEARNED_CKPT={LEARNED_CKPT}", flush=True)
 
     if args.stage == "prepare":
         stage_prepare(args.seed)
