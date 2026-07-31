@@ -47,7 +47,7 @@ def load_model(ckpt_path):
 
 
 def _per_curve_metrics(pred, target, valid):
-    """SmoothL1 / RMSE / Pearson per curve over VALID cadences. arrays (N, L)."""
+    """SmoothL1 / RMSE / Pearson / R^2 per curve over VALID cadences. arrays (N, L)."""
     rows = []
     for i in range(pred.shape[0]):
         v = valid[i] > 0
@@ -57,8 +57,11 @@ def _per_curve_metrics(pred, target, valid):
         sl1 = float(F.smooth_l1_loss(torch.tensor(p), torch.tensor(t)))
         rmse = float(np.sqrt(np.mean((p - t) ** 2)))
         corr = float(np.corrcoef(p, t)[0, 1]) if p.std() > 1e-8 and t.std() > 1e-8 else np.nan
-        rows.append((sl1, rmse, corr))
-    return np.asarray(rows, dtype=np.float64).reshape(-1, 3)
+        ss_tot = float(np.sum((t - t.mean()) ** 2))
+        r2 = float(1.0 - np.sum((t - p) ** 2) / ss_tot) if ss_tot > 1e-12 else np.nan
+        rows.append((sl1, rmse, corr, r2))
+    return np.asarray(rows, dtype=np.float64).reshape(-1, 4)
+
 
 
 def evaluate(model, val_ds):
@@ -79,7 +82,7 @@ def evaluate(model, val_ds):
         c = M[:, col]; c = c[np.isfinite(c)]
         return {"median": float(np.median(c)), "q1": float(np.percentile(c, 25)),
                 "q3": float(np.percentile(c, 75)), "n": int(len(c))}
-    return {"smooth_l1": q(0), "rmse": q(1), "pearson": q(2)}
+    return {"smooth_l1": q(0), "rmse": q(1), "pearson": q(2), "r2": q(3)}
 
 
 def plot_examples(model, val_ds, n, out_path):
