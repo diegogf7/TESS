@@ -18,8 +18,10 @@ export SEED=${SEED:-0}
 export GROUP_SIZE=${GROUP_SIZE:-32}
 export N_STARS=${N_STARS:-1000}
 export EPOCHS=${EPOCHS:-30}
-export LAMBDA_SIZE=${LAMBDA_SIZE:-0.01}      # test 0.001 / 0.01 / 0.1
+export LAMBDA_SIZE=${LAMBDA_SIZE:-0.5}       # new loss scale differs -- sweep 0.3/0.5/0.7/1.0 (do NOT assume 0.7)
 export MIN_OVERLAP=${MIN_OVERLAP:-64}
+export LOSS_MODE=${LOSS_MODE:-topk_fixed_cov}   # topk_fixed_cov | legacy_corr
+export TOPK_PEERS=${TOPK_PEERS:-8}
 export REQUIRE_FULL=${REQUIRE_FULL:-1}       # 0 = all available stars/area (dense_v2 has areas < 1000)
 DENSE_V2=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_cadence_s14_dense_v2.parquet
 export S14_DATA=${S14_DATA:-$DENSE_V2}
@@ -32,7 +34,7 @@ export MAX_BATCHES=${MAX_BATCHES:-0}
 echo "================ resolved configuration ================"
 echo "  node        : $(hostname)"
 echo "  git commit  : $(git rev-parse HEAD 2>/dev/null || echo unknown)"
-echo "  LAMBDA_SIZE/MIN_OVERLAP     : $LAMBDA_SIZE/$MIN_OVERLAP"
+echo "  LOSS_MODE/TOPK/LAMBDA/MINOV : $LOSS_MODE/$TOPK_PEERS/$LAMBDA_SIZE/$MIN_OVERLAP"
 echo "  N_STARS/EPOCHS/require_full : $N_STARS/$EPOCHS/$REQUIRE_FULL"
 echo "  ART/CKPT    : $ART_DIR | $CKPT_DIR"
 echo "========================================================"

@@ -1,9 +1,8 @@
 from __future__ import annotations
-"""Validate the self-supervised instrument-correction model.
-  full : val metrics (before/after pairwise |corr|, % reduction, correction/input
-         & cleaned/input RMS, loss components, latent std + effective rank) +
-         the 4 reject flags + plots (original / correction / cleaned  and
-         before/after group-correlation heatmaps).
+"""Per-curve validation for the self-supervised correction model.
+Overall before/after correlation PLUS per-curve top-K fixed-covariance metrics,
+the high_shared_signal_but_flat_correction flag, and two plot sets
+(random curves + the strongest-systematics curves).
     EVAL_MODE=full  python -m src.shared_s4d.eval_correction
 """
 
@@ -24,15 +23,16 @@ from src.instrument_v2.sector14_dataset import ensure_splits, ensure_time_range
 from src.instrument_v2.train_sector14_jepa import seed_worker, effective_rank
 from src.shared_s4d.ae_dataset import AreaGroupAEDataset
 from src.shared_s4d.model import build_model, GRID, LATENT_DIM
-from src.shared_s4d.correction_losses import (
-    _pairwise_corr, masked_pairwise_residual_correlation, normalized_correction_energy, mean_abs_pairwise_corr)
-from src.shared_s4d.train_correction import (
-    SEED, GROUP_SIZE, N_STARS, LAMBDA_SIZE, MIN_OVERLAP, COLLAPSE_STD, DEVICE,
-    S14_DATA, SPLIT_DIR, BASE_ART_DIR, ART_DIR, CKPT_DIR)
+from src.shared_s4d.correction_losses import _select_topk_peers, mean_abs_pairwise_corr
+from src.shared_s4d.train_correction import (SEED, GROUP_SIZE, N_STARS, LAMBDA_SIZE, MIN_OVERLAP,
+                                             TOPK_PEERS, LOSS_MODE, COLLAPSE_STD, DEVICE,
+                                             S14_DATA, SPLIT_DIR, BASE_ART_DIR, ART_DIR, CKPT_DIR)
 
 CKPT = os.environ.get("CKPT", os.path.join(
-    CKPT_DIR, f"shared_s4d_corr_g{GROUP_SIZE}_z{LATENT_DIM}_lam{LAMBDA_SIZE}_s{SEED}_best.pth"))
+    CKPT_DIR, f"shared_s4d_corr_{LOSS_MODE}_g{GROUP_SIZE}_z{LATENT_DIM}_lam{LAMBDA_SIZE}_s{SEED}_best.pth"))
 OUT_DIR = os.environ.get("OUT_DIR", os.path.join(ART_DIR, "eval"))
+FLAT_THRESH = 0.05
+
 
 def load_model(ckpt_path):
     model = build_model().to(DEVICE)
@@ -43,113 +43,150 @@ def load_model(ckpt_path):
         p.requires_grad_(False)
     return model
 
+
+@torch.no_grad()
+def _group_percurve(Xg, Mg, corrections):
+    """Per-curve metrics for one group. Returns dict of (N,) arrays."""
+    m = (Mg > 0).to(Xg.dtype)
+    xmean = (Xg * m).sum(1) / m.sum(1).clamp(min=1.0)
+    xc = (Xg - xmean[:, None]) * m
+    xvar = (xc * xc).sum(1) / m.sum(1).clamp(min=1.0)               # (N,)
+    resid = Xg - corrections
+    peers = _select_topk_peers(Xg, Mg, TOPK_PEERS, MIN_OVERLAP)
+    N = Xg.shape[0]
+    before = np.full(N, np.nan); after = np.full(N, np.nan); cpm = np.full(N, np.nan)
+
+    def fixed_cov(a, i, j):                                         # Cov over shared / sqrt(xvar_i xvar_j)
+        sh = m[i] * m[j]; n = sh.sum().clamp(min=1.0)
+        am = (a[i] * sh).sum() / n; bm = (a[j] * sh).sum() / n
+        cov = (((a[i] - am) * sh) * ((a[j] - bm) * sh)).sum() / n
+        return float((cov / (torch.sqrt(xvar[i] * xvar[j]) + 1e-6)) ** 2)
+
+    for i in range(N):
+        p = peers[i]
+        if p.numel() == 0:
+            continue
+        pl = p.tolist()
+        before[i] = float(np.mean([fixed_cov(Xg, i, j) for j in pl]))
+        after[i] = float(np.mean([fixed_cov(resid, i, j) for j in pl]))
+        pmask = (m[pl].sum(0) > 0).to(Xg.dtype)                     # cadences some peer observed
+        peer_mean = (Xg[pl] * m[pl]).sum(0) / m[pl].sum(0).clamp(min=1.0)
+        v = pmask > 0
+        c = corrections[i]
+        if int(v.sum()) >= 2 and c[v].std() > 1e-8 and peer_mean[v].std() > 1e-8:
+            cpm[i] = float(torch.corrcoef(torch.stack([c[v], peer_mean[v]]))[0, 1])
+
+    crms = torch.sqrt((m * corrections ** 2).sum(1) / m.sum(1).clamp(min=1.0))
+    xrms = torch.sqrt((m * Xg ** 2).sum(1) / m.sum(1).clamp(min=1.0)).clamp(min=1e-8)
+    clnrms = torch.sqrt((m * resid ** 2).sum(1) / m.sum(1).clamp(min=1.0))
+    return {"before": before, "after": after, "corr_c_peermean": cpm,
+            "c_over_x": (crms / xrms).cpu().numpy(), "cleaned_over_x": (clnrms / xrms).cpu().numpy()}
+
+
+def _q(a):
+    a = np.asarray(a, float); a = a[np.isfinite(a)]
+    if a.size == 0:
+        return {"median": np.nan, "q1": np.nan, "q3": np.nan, "p10": np.nan, "p90": np.nan, "n": 0}
+    return {"median": float(np.median(a)), "q1": float(np.percentile(a, 25)),
+            "q3": float(np.percentile(a, 75)), "p10": float(np.percentile(a, 10)),
+            "p90": float(np.percentile(a, 90)), "n": int(a.size)}
+
+
 def evaluate(model, val_ds):
     dl = DataLoader(val_ds, batch_size=1, num_workers=2, worker_init_fn=seed_worker,
                     generator=torch.Generator().manual_seed(SEED))
-    bef, aft, cx, rx, sh, sz, lat = [], [], [], [], [], [], []
+    cols = {k: [] for k in ("before", "after", "corr_c_peermean", "c_over_x", "cleaned_over_x")}
+    befs, afts = [], []
+    strongest = []                                                 # top-6 curves by before-cov, for plotting
     with torch.no_grad():
         for Xg, Mg in dl:
             Xg = Xg.squeeze(0).to(DEVICE); Mg = Mg.squeeze(0).to(DEVICE)
-            c, z = model(Xg, Mg); r = Xg - c; m = (Mg > 0).float()
-            bef.append(mean_abs_pairwise_corr(Xg, Mg, MIN_OVERLAP))
-            aft.append(mean_abs_pairwise_corr(r, Mg, MIN_OVERLAP))
-            xr = torch.sqrt((m * Xg ** 2).sum(1) / m.sum(1).clamp(min=1.0)).clamp(min=1e-8)
-            cx.append(float((torch.sqrt((m * c ** 2).sum(1) / m.sum(1).clamp(min=1.0)) / xr).mean()))
-            rx.append(float((torch.sqrt((m * r ** 2).sum(1) / m.sum(1).clamp(min=1.0)) / xr).mean()))
-            sh.append(float(masked_pairwise_residual_correlation(r, Mg, MIN_OVERLAP)))
-            sz.append(float(normalized_correction_energy(c, Xg, Mg)))
-            lat.append(z.cpu().numpy())
-    Z = np.concatenate(lat, 0)
-    b = float(np.nanmean(bef)); a = float(np.nanmean(aft))
-    return {"corr_before": b, "corr_after": a,
-            "pct_reduction": float(100.0 * (b - a) / b) if b > 1e-8 else float("nan"),
-            "correction_rms_over_input_rms": float(np.mean(cx)),
-            "cleaned_rms_over_input_rms": float(np.mean(rx)),
-            "shared_loss": float(np.mean(sh)), "size_loss": float(np.mean(sz)),
-            "latent_std": float(Z.std(0).mean()), "effective_rank": float(effective_rank(Z)),
-            "n_val_groups": len(val_ds)}
+            corr, _ = model(Xg, Mg)
+            befs.append(mean_abs_pairwise_corr(Xg, Mg, MIN_OVERLAP))
+            afts.append(mean_abs_pairwise_corr(Xg - corr, Mg, MIN_OVERLAP))
+            pc = _group_percurve(Xg, Mg, corr)
+            for k in cols:
+                cols[k].append(pc[k])
+            bc = pc["before"]
+            for i in range(Xg.shape[0]):                            # track strongest-systematics curves
+                if np.isfinite(bc[i]):
+                    strongest.append((bc[i], Xg[i].cpu().numpy(), corr[i].cpu().numpy(), Mg[i].cpu().numpy()))
+            strongest = sorted(strongest, key=lambda t: -t[0])[:6]
 
-def reject_flags(m):
-    f = {"correction_nearly_identical_to_input": bool(m["correction_rms_over_input_rms"] > 0.9),
-         "cleaned_nearly_zero": bool(m["cleaned_rms_over_input_rms"] < 0.1),
-         "correction_zero_but_corr_unchanged":
-             bool(m["correction_rms_over_input_rms"] < 0.05 and (m["pct_reduction"] < 2.0)),
-         "latent_collapse": bool(m["latent_std"] < COLLAPSE_STD)}
-    f["any"] = any(f.values())
-    return f
+    A = {k: np.concatenate(v) for k, v in cols.items()}
+    pct = 100.0 * (A["before"] - A["after"]) / np.where(A["before"] > 1e-8, A["before"], np.nan)
 
-@torch.no_grad()
-def corr_matrix(curves, masks, min_overlap):
-    """(N, N) |pairwise Pearson| matrix (NaN where a pair lacks min overlap)."""
-    N = curves.shape[0]
-    corr, valid = _pairwise_corr(curves, masks, min_overlap)
-    ii, jj = torch.triu_indices(N, N, offset=1)          # same order as _pairwise_corr
-    C = np.full((N, N), np.nan); np.fill_diagonal(C, 1.0)
-    cc = corr.abs().cpu().numpy(); vv = valid.cpu().numpy()
-    ii = ii.numpy(); jj = jj.numpy()
-    for k in range(len(cc)):
-        v = cc[k] if vv[k] else np.nan
-        C[ii[k], jj[k]] = v; C[jj[k], ii[k]] = v
-    return C
+    # failure flag: top-quartile ORIGINAL shared cov AND flat correction
+    hi = A["before"] >= np.nanpercentile(A["before"], 75)
+    flat = A["c_over_x"] < FLAT_THRESH
+    n_flag = int(np.sum(hi & flat))
+    metrics = {
+        "overall_corr_before": float(np.nanmean(befs)), "overall_corr_after": float(np.nanmean(afts)),
+        "topk_cov_before": _q(A["before"]), "topk_cov_after": _q(A["after"]),
+        "pct_reduction_per_curve": _q(pct), "c_over_x": _q(A["c_over_x"]),
+        "cleaned_over_x": _q(A["cleaned_over_x"]), "corr_correction_peermean": _q(A["corr_c_peermean"]),
+        "frac_flat_correction": float(np.mean(A["c_over_x"] < FLAT_THRESH)),
+        "n_curves": int(A["before"].size),
+    }
+    flags = {
+        "high_shared_signal_but_flat_correction": {"n": n_flag,
+            "frac": float(n_flag / max(1, int(hi.sum())))},
+        "correction_nearly_identical_to_input": bool(_q(A["c_over_x"])["median"] > 0.9),
+        "cleaned_nearly_zero": bool(_q(A["cleaned_over_x"])["median"] < 0.1),
+    }
+    flags["any_degeneracy"] = bool(n_flag > 0 or flags["correction_nearly_identical_to_input"]
+                                   or flags["cleaned_nearly_zero"])
+    return metrics, flags, strongest
 
-def plot_examples(model, val_ds, n, out_path):
-    Xg, Mg = val_ds[0]
-    with torch.no_grad():
-        c, _ = model(Xg.to(DEVICE), Mg.to(DEVICE))
-    x = Xg.numpy(); m = Mg.numpy(); cc = c.cpu().numpy(); r = x - cc
-    g = np.arange(GRID); n = min(n, x.shape[0])
+
+def plot_curves(items, out_path, title):
+    n = len(items)
     fig, axes = plt.subplots(n, 1, figsize=(12, 2.2 * n), sharex=True)
     axes = np.atleast_1d(axes)
-    for i in range(n):
-        obs = m[i] > 0; ax = axes[i]
-        ax.plot(g[obs], x[i][obs], ".", ms=2, color="0.6", label="original")
-        ax.plot(g, cc[i], color="tab:red", lw=0.9, label="correction c")
-        ax.plot(g[obs], r[i][obs], ".", ms=2, color="tab:blue", label="cleaned x-c")
-        if i == 0:
+    g = np.arange(GRID)
+    for k, (bc, x, c, mk) in enumerate(items):
+        obs = mk > 0; ax = axes[k]
+        ax.plot(g[obs], x[obs], ".", ms=2, color="0.6", label="original")
+        ax.plot(g, c, color="tab:red", lw=0.9, label="correction c")
+        ax.plot(g[obs], (x - c)[obs], ".", ms=2, color="tab:blue", label="cleaned x-c")
+        if k == 0:
             ax.legend(fontsize=7, ncol=3, loc="upper right")
-        ax.set_ylabel(f"curve {i}")
-    fig.suptitle("instrument correction: original / correction / cleaned")
-    fig.tight_layout(); fig.savefig(out_path, dpi=130); plt.close(fig)
+        ax.set_ylabel(f"before_cov={bc:.2f}")
+    fig.suptitle(title); fig.tight_layout(); fig.savefig(out_path, dpi=130); plt.close(fig)
 
-def plot_corr_matrices(model, val_ds, out_path):
-    Xg, Mg = val_ds[0]
-    Xg = Xg.to(DEVICE); Mg = Mg.to(DEVICE)
-    with torch.no_grad():
-        c, _ = model(Xg, Mg)
-    r = Xg - c
-    B = corr_matrix(Xg, Mg, MIN_OVERLAP); A = corr_matrix(r, Mg, MIN_OVERLAP)
-    off = ~np.eye(len(B), dtype=bool)
-    fig, ax = plt.subplots(1, 2, figsize=(11, 5))
-    for axi, Mtx, ttl in ((ax[0], B, "before"), (ax[1], A, "after")):
-        im = axi.imshow(Mtx, vmin=0, vmax=1, cmap="viridis")
-        axi.set_title(f"|pairwise corr| {ttl}   mean={np.nanmean(Mtx[off]):.3f}", fontsize=9)
-        fig.colorbar(im, ax=axi, fraction=0.046)
-    fig.suptitle("group correlation before vs after correction")
-    fig.tight_layout(); fig.savefig(out_path, dpi=130); plt.close(fig)
 
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     df = pd.read_parquet(S14_DATA)
     df = df[df["sector"] == 14].drop_duplicates("TIC").reset_index(drop=True)
     df = ensure_area_column(df)
-    train_tics, val_tics, test_tics = ensure_splits(SPLIT_DIR, BASE_ART_DIR)
-    t_range = ensure_time_range(BASE_ART_DIR, df, train_tics)
-    base_va = Sector14GroupStatDataset(df, val_tics, t_range, "area", GROUP_SIZE, min_valid=16)
+    tr, va, te = ensure_splits(SPLIT_DIR, BASE_ART_DIR)
+    t_range = ensure_time_range(BASE_ART_DIR, df, tr)
+    base_va = Sector14GroupStatDataset(df, va, t_range, "area", GROUP_SIZE, min_valid=16)
     val_ds = AreaGroupAEDataset(base_va.X, base_va.M, base_va.areas, base_va.tics,
                                 n_stars=N_STARS, group_size=GROUP_SIZE, seed=SEED,
                                 require_full=False, resample=False)
     model = load_model(CKPT)
-    metrics = evaluate(model, val_ds)
-    flags = reject_flags(metrics)
-    plot_examples(model, val_ds, 6, os.path.join(OUT_DIR, "correction_examples.png"))
-    plot_corr_matrices(model, val_ds, os.path.join(OUT_DIR, "correlation_before_after.png"))
-    report = {"ckpt": CKPT, "lambda_size": LAMBDA_SIZE, "metrics": metrics, "reject_flags": flags}
+    metrics, flags, strongest = evaluate(model, val_ds)
+
+    # plot 1: random curves (first group); plot 2: strongest-systematics curves
+    Xg, Mg = val_ds[0]
+    with torch.no_grad():
+        c0, _ = model(Xg.to(DEVICE), Mg.to(DEVICE))
+    rand_items = [(np.nan, Xg[i].numpy(), c0[i].cpu().numpy(), Mg[i].numpy()) for i in range(6)]
+    plot_curves(rand_items, os.path.join(OUT_DIR, "correction_random.png"), "random validation curves")
+    plot_curves(strongest, os.path.join(OUT_DIR, "correction_strongest.png"),
+                "strongest-systematics curves (do they still get flat corrections?)")
+
+    report = {"ckpt": CKPT, "loss_mode": LOSS_MODE, "lambda_size": LAMBDA_SIZE,
+              "topk_peers": TOPK_PEERS, "metrics": metrics, "reject_flags": flags}
     with open(os.path.join(OUT_DIR, "eval_correction.json"), "w") as fh:
         json.dump(report, fh, indent=2)
     print(json.dumps(report, indent=2), flush=True)
-    if flags["any"]:
-        print("!! REJECT: " + ", ".join(k for k, v in flags.items() if v and k != "any"), flush=True)
-    print(f"wrote correction_examples.png + correlation_before_after.png + eval_correction.json to {OUT_DIR}", flush=True)
+    if flags["any_degeneracy"]:
+        print("!! DEGENERACY FLAG(S) TRIPPED", flush=True)
+    print(f"wrote correction_random.png + correction_strongest.png + eval_correction.json to {OUT_DIR}", flush=True)
+
 
 if __name__ == "__main__":
     main()

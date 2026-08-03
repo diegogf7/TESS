@@ -21,14 +21,19 @@ from src.instrument_v2.train_sector14_jepa import git_commit, seed_worker, effec
 from src.shared_s4d.ae_dataset import AreaGroupAEDataset
 from src.shared_s4d.model import build_model, preprocessing_config, GRID, LATENT_DIM
 from src.shared_s4d.correction_losses import (
-    masked_pairwise_residual_correlation, normalized_correction_energy, mean_abs_pairwise_corr)
+    masked_pairwise_residual_correlation, normalized_correction_energy, mean_abs_pairwise_corr,
+    topk_fixed_cov_loss, relative_correction_size)
+
 
 SEED = int(os.environ.get("SEED", "0"))
 GROUP_SIZE = int(os.environ.get("GROUP_SIZE", "32"))
 N_STARS = int(os.environ.get("N_STARS", "1000"))
 EPOCHS = int(os.environ.get("EPOCHS", "30"))
 LR = float(os.environ.get("LR", "1e-3"))
-LAMBDA_SIZE = float(os.environ.get("LAMBDA_SIZE", "0.01"))       # test 0.001 / 0.01 / 0.1
+LAMBDA_SIZE = float(os.environ.get("LAMBDA_SIZE", "0.01"))
+LOSS_MODE = os.environ.get("LOSS_MODE", "topk_fixed_cov")     # topk_fixed_cov | legacy_corr
+TOPK_PEERS = int(os.environ.get("TOPK_PEERS", "8"))
+assert LOSS_MODE in ("topk_fixed_cov", "legacy_corr"), LOSS_MODE
 MIN_OVERLAP = int(os.environ.get("MIN_OVERLAP", "64"))          # min shared observed cadences per pair
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "4"))
 REQUIRE_FULL = os.environ.get("REQUIRE_FULL", "1").lower() not in ("0", "false", "no")
@@ -43,6 +48,16 @@ BASE_ART_DIR = os.environ.get("BASE_ART_DIR", os.path.join("artifacts", "instrum
 ART_DIR = os.environ.get("ART_DIR", os.path.join("artifacts", "shared_s4d", "correction_v1"))
 CKPT_DIR = os.environ.get("CKPT_DIR", "/orcd/scratch/orcd/006/diegogon/checkpoints/shared_s4d_correction_v1")
 
+def group_losses(residuals, corrections, curves, masks):
+    """(shared, size) for the active LOSS_MODE."""
+    if LOSS_MODE == "topk_fixed_cov":
+        shared = topk_fixed_cov_loss(residuals, curves, masks, TOPK_PEERS, MIN_OVERLAP)
+        size = relative_correction_size(corrections, curves, masks)
+    else:
+        shared = masked_pairwise_residual_correlation(residuals, masks, MIN_OVERLAP)
+        size = normalized_correction_energy(corrections, curves, masks)
+    return shared, size
+
 
 def run_train_epoch(model, loader, optimizer, scaler):
     model.train()
@@ -55,8 +70,8 @@ def run_train_epoch(model, loader, optimizer, scaler):
         with torch.autocast(device_type=DEVICE.type, enabled=USE_AMP and DEVICE.type == "cuda"):
             corrections, latents = model(Xg, Mg)                      # c_i (32, L)
             residuals = Xg - corrections                              # r_i = x_i - c_i
-            shared_loss = masked_pairwise_residual_correlation(residuals, Mg, MIN_OVERLAP)
-            size_loss = normalized_correction_energy(corrections, Xg, Mg)
+            shared_loss, size_loss = group_losses(residuals, corrections, Xg, Mg)
+
             group_loss = shared_loss + LAMBDA_SIZE * size_loss        # combine, THEN backward
         if scaler.is_enabled():
             scaler.scale(group_loss).backward(); scaler.step(optimizer); scaler.update()
@@ -78,8 +93,9 @@ def val_metrics(model, loader):
             residuals = Xg - corrections
             befs.append(mean_abs_pairwise_corr(Xg, Mg, MIN_OVERLAP))
             afts.append(mean_abs_pairwise_corr(residuals, Mg, MIN_OVERLAP))
-            shareds.append(float(masked_pairwise_residual_correlation(residuals, Mg, MIN_OVERLAP)))
-            sizes.append(float(normalized_correction_energy(corrections, Xg, Mg)))
+            sh, sz = group_losses(residuals, corrections, Xg, Mg)
+            shareds.append(float(sh)); sizes.append(float(sz))
+
             m = (Mg > 0).float()
             crms = torch.sqrt((m * corrections ** 2).sum(1) / m.sum(1).clamp(min=1.0))
             xrms = torch.sqrt((m * Xg ** 2).sum(1) / m.sum(1).clamp(min=1.0))
@@ -97,10 +113,10 @@ def val_metrics(model, loader):
 def main():
     random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
     os.makedirs(ART_DIR, exist_ok=True); os.makedirs(CKPT_DIR, exist_ok=True)
-    tag = f"shared_s4d_corr_g{GROUP_SIZE}_z{LATENT_DIM}_lam{LAMBDA_SIZE}_s{SEED}"
+    tag = f"shared_s4d_corr_{LOSS_MODE}_g{GROUP_SIZE}_z{LATENT_DIM}_lam{LAMBDA_SIZE}_s{SEED}"
     ckpt_base = os.path.join(CKPT_DIR, tag)
-    print(f"git {git_commit()}  tag {tag}  device {DEVICE}  lambda_size {LAMBDA_SIZE}  "
-          f"min_overlap {MIN_OVERLAP}  require_full {REQUIRE_FULL}  amp {USE_AMP}", flush=True)
+    print(f"git {git_commit()}  tag {tag}  device {DEVICE}  loss {LOSS_MODE} topk {TOPK_PEERS}  "
+          f"lambda_size {LAMBDA_SIZE}  min_overlap {MIN_OVERLAP}  require_full {REQUIRE_FULL}  amp {USE_AMP}", flush=True)
 
     df = pd.read_parquet(S14_DATA)
     df = df[df["sector"] == 14].drop_duplicates("TIC").reset_index(drop=True)
@@ -177,6 +193,7 @@ def main():
             break
 
     selection = {"tag": tag, "seed": SEED, "group_size": GROUP_SIZE, "latent_dim": LATENT_DIM,
+                 "loss_mode": LOSS_MODE, "topk_peers": TOPK_PEERS,
                  "n_stars": N_STARS, "epochs": EPOCHS, "lambda_size": LAMBDA_SIZE, "min_overlap": MIN_OVERLAP,
                  "require_full": REQUIRE_FULL, "collapsed": collapsed, "best": best,
                  "checkpoint": f"{ckpt_base}_best.pth", "encoder_checkpoint": f"{ckpt_base}_best_encoder.pth",
