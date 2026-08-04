@@ -23,7 +23,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from tess_stars2px import tess_stars2px_function_entry
-from src.instrument_v2.area_commonmode_dataset import ensure_area_column
 
 ROOT = "/orcd/scratch/orcd/006/diegogon/tglc_primary"
 IN_PARQUET = os.environ.get("IN_PARQUET", f"{ROOT}/tglc_raw_cadence_s14_dense_v2.parquet")
@@ -76,13 +75,13 @@ def validate(chk):
 
 
 def plot_per_ccd(chk):
-    sub = ensure_area_column(chk.dropna(subset=["DETECTOR_X"]).copy())
+    sub = chk.dropna(subset=["DETECTOR_X"]).copy()
     fig, axes = plt.subplots(4, 4, figsize=(14, 14)); axes = axes.ravel()
     for k, ((cam, ccd), g) in enumerate(sorted(sub.groupby(["camera", "ccd"]))):
         if k >= 16:
             break
         ax = axes[k]
-        ax.scatter(g["DETECTOR_X"], g["DETECTOR_Y"], s=2, c=(g["area"] % 20), cmap="tab20")
+        ax.scatter(g["DETECTOR_X"], g["DETECTOR_Y"], s=2, c="tab:blue", alpha=0.3)
         ax.set_title(f"cam{cam} ccd{ccd} (n={len(g)})", fontsize=8)
         ax.set_xlim(0, COL_MAX); ax.set_ylim(0, ROW_MAX)
     fig.suptitle("physical detector X/Y per CCD (smooth coverage = no artificial tile grid)")

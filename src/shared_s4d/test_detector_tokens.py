@@ -73,12 +73,12 @@ def test_real_detector_group_from_parquet():
                           "/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_cadence_s14_dense_v2_xy.parquet")
     if not os.path.exists(path):
         print("  (skip test_real_detector_group_from_parquet -- no xy parquet here)"); return
-    df = pd.read_parquet(path, columns=["TIC", "camera", "ccd", "STAR_X", "STAR_Y"])
-    df = df.dropna(subset=["STAR_X", "STAR_Y"]).drop_duplicates("TIC")
+    df = pd.read_parquet(path, columns=["TIC", "camera", "ccd", "DETECTOR_X", "DETECTOR_Y"])
+    df = df.dropna(subset=["DETECTOR_X", "DETECTOR_Y"]).drop_duplicates("TIC")
     (cam, ccd) = df.groupby(["camera", "ccd"]).size().sort_values().index[-1]     # densest chip
     sub = df[(df.camera == cam) & (df.ccd == ccd)].head(300).reset_index(drop=True)
     n = len(sub)
-    detxy = sub[["STAR_X", "STAR_Y"]].to_numpy(float)
+    detxy = sub[["DETECTOR_X", "DETECTOR_Y"]].to_numpy(float)
     areas = np.full(n, int(cam) * 100 + int(ccd) * 10, np.int64)                  # single pool
     ds = AreaGroupLOODataset(np.zeros((n, 8), np.float32), np.ones((n, 8), np.float32),
                              areas, sub["TIC"].to_numpy().astype(str), n_stars=1000, group_size=16,
