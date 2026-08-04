@@ -22,7 +22,8 @@ from src.shared_s4d.ae_dataset import AreaGroupAEDataset
 from src.shared_s4d.model import build_model, preprocessing_config, GRID, LATENT_DIM
 from src.shared_s4d.correction_losses import (
     masked_pairwise_residual_correlation, normalized_correction_energy, mean_abs_pairwise_corr,
-    topk_fixed_cov_loss, relative_correction_size)
+    topk_fixed_cov_loss, relative_correction_size,
+    windowed_group_cov_loss, soft_cap_size)
 
 
 SEED = int(os.environ.get("SEED", "0"))
@@ -33,7 +34,7 @@ LR = float(os.environ.get("LR", "1e-3"))
 LAMBDA_SIZE = float(os.environ.get("LAMBDA_SIZE", "0.01"))
 LOSS_MODE = os.environ.get("LOSS_MODE", "topk_fixed_cov")     # topk_fixed_cov | legacy_corr
 TOPK_PEERS = int(os.environ.get("TOPK_PEERS", "8"))
-assert LOSS_MODE in ("topk_fixed_cov", "legacy_corr"), LOSS_MODE
+assert LOSS_MODE in ("topk_fixed_cov", "legacy_corr", "windowed_group_cov"), LOSS_MODE
 MIN_OVERLAP = int(os.environ.get("MIN_OVERLAP", "64"))          # min shared observed cadences per pair
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "4"))
 REQUIRE_FULL = os.environ.get("REQUIRE_FULL", "1").lower() not in ("0", "false", "no")
@@ -53,6 +54,9 @@ def group_losses(residuals, corrections, curves, masks):
     if LOSS_MODE == "topk_fixed_cov":
         shared = topk_fixed_cov_loss(residuals, curves, masks, TOPK_PEERS, MIN_OVERLAP)
         size = relative_correction_size(corrections, curves, masks)
+    elif LOSS_MODE == "windowed_group_cov":
+        shared = windowed_group_cov_loss(residuals, curves, masks)
+        size = soft_cap_size(corrections, curves, masks)      # run this mode with LAMBDA_SIZE=0.1
     else:
         shared = masked_pairwise_residual_correlation(residuals, masks, MIN_OVERLAP)
         size = normalized_correction_energy(corrections, curves, masks)
