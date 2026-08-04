@@ -58,6 +58,12 @@ def build_model(n_tokens=N_TOKENS, token_dim=TOKEN_DIM):
     return SharedS4DSystematics(n_tokens=n_tokens, token_dim=token_dim)
 
 
+def experiment_tag(loss_mode, grouping_mode, group_size, n_tokens, token_dim, lambda_size, seed):
+    """Single source of truth for checkpoint/metrics tags, shared by train and eval."""
+    return (f"shared_s4d_corr_{loss_mode}_{grouping_mode}_g{group_size}"
+            f"_t{n_tokens}_z{token_dim}_lam{lambda_size}_s{seed}")
+
+
 def preprocessing_config():
     return {"grid_len": GRID, "n_tokens": N_TOKENS, "token_dim": TOKEN_DIM, "latent_dim": LATENT_DIM,
             "d_model": D_MODEL, "n_layers": N_LAYERS, "dropout": DROPOUT,

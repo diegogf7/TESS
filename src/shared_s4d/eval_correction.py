@@ -22,15 +22,16 @@ from src.instrument_v2.area_commonmode_dataset import Sector14GroupStatDataset, 
 from src.instrument_v2.sector14_dataset import ensure_splits, ensure_time_range
 from src.instrument_v2.train_sector14_jepa import seed_worker, effective_rank
 from src.shared_s4d.ae_dataset import AreaGroupAEDataset
-from src.shared_s4d.model import build_model, GRID, LATENT_DIM, N_TOKENS, TOKEN_DIM
-from src.shared_s4d.correction_losses import _select_topk_peers, mean_abs_pairwise_corr
+from src.shared_s4d.model import build_model, experiment_tag, GRID, LATENT_DIM, N_TOKENS, TOKEN_DIM
+from src.shared_s4d.correction_losses import (_select_topk_peers, mean_abs_pairwise_corr,
+                                              pairwise_window_cov_loss)
 from src.shared_s4d.train_correction import (SEED, GROUP_SIZE, N_STARS, LAMBDA_SIZE, MIN_OVERLAP,
                                              TOPK_PEERS, LOSS_MODE, GROUPING_MODE, COLLAPSE_STD, DEVICE,
                                              S14_DATA, SPLIT_DIR, BASE_ART_DIR, ART_DIR, CKPT_DIR)
 from src.instrument_v2.train_sector14_jepa import effective_rank
 
-CKPT = os.environ.get("CKPT", os.path.join(
-    CKPT_DIR, f"shared_s4d_corr_{LOSS_MODE}_g{GROUP_SIZE}_z{LATENT_DIM}_lam{LAMBDA_SIZE}_s{SEED}_best.pth"))
+CKPT = os.environ.get("CKPT", os.path.join(CKPT_DIR, experiment_tag(   # auto-locate via shared tag
+    LOSS_MODE, GROUPING_MODE, GROUP_SIZE, N_TOKENS, TOKEN_DIM, LAMBDA_SIZE, SEED) + "_best.pth"))
 OUT_DIR = os.environ.get("OUT_DIR", os.path.join(ART_DIR, "eval"))
 FLAT_THRESH = 0.05
 
@@ -97,7 +98,7 @@ def evaluate(model, val_ds):
     dl = DataLoader(val_ds, batch_size=1, num_workers=2, worker_init_fn=seed_worker,
                     generator=torch.Generator().manual_seed(SEED))
     cols = {k: [] for k in ("before", "after", "corr_c_peermean", "c_over_x", "cleaned_over_x")}
-    befs, afts, caps = [], [], []
+    befs, afts, caps, pwbs, pwas = [], [], [], [], []
     corr_chunks = []                                               # subsample of corrections for effective rank
     n_nan = 0
     strongest = []                                                 # top-6 curves by before-cov, for plotting
@@ -106,6 +107,8 @@ def evaluate(model, val_ds):
             Xg = Xg.squeeze(0).to(DEVICE); Mg = Mg.squeeze(0).to(DEVICE)
             corr, _ = model(Xg, Mg)
             n_nan += int((~torch.isfinite(corr)).sum())            # NaN/Inf in corrections
+            pwbs.append(float(pairwise_window_cov_loss(Xg, Xg, Mg)))          # PRIMARY: pairwise-window loss
+            pwas.append(float(pairwise_window_cov_loss(Xg - corr, Xg, Mg)))
             befs.append(mean_abs_pairwise_corr(Xg, Mg, MIN_OVERLAP))
             afts.append(mean_abs_pairwise_corr(Xg - corr, Mg, MIN_OVERLAP))
             m = (Mg > 0).float()                                   # soft-cap ratio = mean(c^2)/var(x)
@@ -133,7 +136,10 @@ def evaluate(model, val_ds):
     hi = A["before"] >= np.nanpercentile(A["before"], 75)
     flat = A["c_over_x"] < FLAT_THRESH
     n_flag = int(np.sum(hi & flat))
+    pwb = float(np.mean(pwbs)); pwa = float(np.mean(pwas))
     metrics = {
+        "pw_before": pwb, "pw_after": pwa,
+        "pw_reduction": float(100.0 * (pwb - pwa) / pwb) if pwb > 1e-12 else float("nan"),
         "overall_corr_before": float(np.nanmean(befs)), "overall_corr_after": float(np.nanmean(afts)),
         "topk_cov_before": _q(A["before"]), "topk_cov_after": _q(A["after"]),
         "pct_reduction_per_curve": _q(pct), "c_over_x": _q(A["c_over_x"]),

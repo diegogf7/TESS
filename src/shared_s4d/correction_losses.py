@@ -204,6 +204,35 @@ def windowed_group_cov_loss(residuals, curves, masks, scales=(64, 128), overlap=
     return torch.stack(losses).mean()
 
 
+def pairwise_window_cov_loss(residuals, curves, masks, scales=(64, 128), overlap=0.5, eps=1e-6):
+    """Per-pair, per-window SQUARED normalized covariance of the CLEANED residuals.
+        q_ij = Cov(r_i, r_j) / (sqrt(Var(x_i) Var(x_j)) + eps)   [Var from DETACHED originals]
+        L    = mean over { valid pairs, ALL valid windows } of q_ij^2
+    Each pair's covariance is SQUARED BEFORE averaging, so positive and negative pair
+    covariances cannot cancel (the flaw in windowed_group_cov, which averaged signed
+    covariances before squaring). ALL valid windows are scored -- no top-k selection.
+    A pair counts in a window only with >=50% shared observed cadences; windows with no
+    valid pair are skipped so nothing divides by zero -> no NaN. The denominators are the
+    detached original-curve window variances, so lowering L requires shrinking residual
+    covariance, not inflating residual variance or zeroing the correction (r=x gives the
+    full original correlation). Gradient flows only through the residuals."""
+    N, L = residuals.shape
+    ii, jj = torch.triu_indices(N, N, offset=1, device=residuals.device)
+    parts = []
+    for W in scales:
+        stride = max(1, int(W * overlap))
+        for s in range(0, L - W + 1, stride):
+            e = s + W
+            var = _window_var(curves.detach(), masks, s, e)          # detached fixed denominators
+            q, valid = _window_pair_cov(residuals, masks, s, e, ii, jj, overlap, norm_var=var)
+            if int(valid.sum()) == 0:
+                continue
+            parts.append(q[valid] ** 2)                              # square EACH pair before averaging
+    if not parts:
+        return residuals.sum() * 0.0
+    return torch.cat(parts).mean()
+
+
 def soft_cap_size(corrections, curves, masks, cap=0.5, eps=1e-6):
     """ratio_i = masked_mean(c_i^2) / (masked_var(x_i)+eps); size = mean(relu(ratio-0.5)^2).
     A soft cap: corrections up to half the original variance are free, beyond that penalized."""

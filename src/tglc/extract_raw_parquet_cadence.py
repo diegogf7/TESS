@@ -30,18 +30,9 @@ N_WORKERS = int(os.environ.get("N_WORKERS", "16"))
 
 EXTRA_COLUMNS = ("cadence_num", "TESS_flags", "TGLC_flags", "background")
 
-# ABSOLUTE detector position of the star on the CCD (for detector_nearest grouping). The TGLC
-# primary header stores STAR_X/STAR_Y = the star's position WITHIN its CUTSIZE-px FFI cutout (a
-# few px) plus CUT_X/CUT_Y = the cutout's tile index. Absolute CCD pixel = CUT_* * CUTSIZE + STAR_*.
-def _detector_xy(head):
-    try:
-        cutsize = float(head["CUTSIZE"])
-        return (float(head["CUT_X"]) * cutsize + float(head["STAR_X"]),
-                float(head["CUT_Y"]) * cutsize + float(head["STAR_Y"]))
-    except (KeyError, TypeError, ValueError):
-        return float("nan"), float("nan")
-
-
+# NOTE: physical detector coordinates (DETECTOR_X/DETECTOR_Y) are NOT derived here. The FITS
+# header's STAR_X/STAR_Y are aperture-local (position within the cutout), not true CCD pixels.
+# Detector col/row are computed from RA/Dec via tess-point in src/tglc/merge_detector_positions.py.
 if os.path.exists(OUT_PATH):
     raise SystemExit(f"refusing to overwrite existing {OUT_PATH}")
 
@@ -73,7 +64,6 @@ def extract_one(path):
                 "ra": float(head.get("RA_OBJ", float("nan"))),
                 "dec": float(head.get("DEC_OBJ", float("nan"))),
             }
-            row["STAR_X"], row["STAR_Y"] = _detector_xy(head)   # absolute CCD pixels (detector_nearest)
             for col in EXTRA_COLUMNS:
                 if col in available:
                     values = np.asarray(data[col])
@@ -105,11 +95,6 @@ if __name__ == "__main__":
         n_missing = int(df[col].isna().sum()) if col in df.columns else len(df)
         if n_missing:
             print(f"WARNING: column {col} missing for {n_missing}/{len(df)} rows")
-    for col in ("STAR_X", "STAR_Y"):                          # detector coords: warn loudly if the header cards missed
-        n_nan = int(df[col].isna().sum() + np.isnan(df[col].astype(float)).sum()) if col in df.columns else len(df)
-        if n_nan:
-            print(f"WARNING: {col} is NaN for {n_nan}/{len(df)} rows -- header card name likely differs; "
-                  f"inspect a FITS header and update POS_X_KEYS/POS_Y_KEYS (detector_nearest needs this)")
 
     df.to_parquet(OUT_PATH)
     print(f"wrote {OUT_PATH} ({len(df)} rows)")

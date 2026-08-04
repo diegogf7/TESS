@@ -33,11 +33,9 @@ class AreaGroupLOODataset(Dataset):
                                "-- refusing to silently use random grouping")
         if self.grouping_mode == "detector_nearest" and self.detxy is None:
             raise RuntimeError(
-                "GROUPING_MODE=detector_nearest requires detector STAR_X/STAR_Y; none provided. "
-                "These are NOT in the current parquet -- the dataset must be REGENERATED: add "
-                "STAR_X/STAR_Y in src/tglc/extract_raw_parquet_cadence.py (from the FITS primary "
-                "header, next to CAMERA/CCD/RA_OBJ), rerun the extractor, and rebuild the "
-                "dense_v2 split. Refusing to fall back to RA/Dec.")
+                "GROUPING_MODE=detector_nearest requires physical DETECTOR_X/DETECTOR_Y; none "
+                "provided. Regenerate the parquet with src/tglc/merge_detector_positions.py "
+                "(RA/Dec -> TESS detector col/row via tess-point). Refusing to fall back to RA/Dec.")
 
         rows_by_area = {}
         for i, a in enumerate(self.areas):
@@ -54,8 +52,15 @@ class AreaGroupLOODataset(Dataset):
                                    f"{self.n_stars} stars. Refusing to duplicate.\n{rep}")
             self.pool = {a: np.sort(np.random.default_rng([self.base_seed, a]).choice(
                 r, size=self.n_stars, replace=False)) for a, r in rows_by_area.items()}
-        else:                                            # val: use all available (>= one group)
-            self.pool = {a: r for a, r in rows_by_area.items() if len(r) >= self.group_size}
+        else:                                            # cap each area at n_stars DETERMINISTICALLY
+            self.pool = {}
+            for a, r in rows_by_area.items():
+                if len(r) < self.group_size:
+                    continue
+                if len(r) > self.n_stars:                 # never let a candidate pool exceed n_stars
+                    r = np.sort(np.random.default_rng([self.base_seed, a]).choice(
+                        r, size=self.n_stars, replace=False))
+                self.pool[a] = r
         self.eligible = sorted(self.pool)
         if not self.eligible:
             raise RuntimeError("no area has enough stars for a group")
@@ -67,9 +72,9 @@ class AreaGroupLOODataset(Dataset):
         """Per-pool squared-distance matrix for the active local grouping mode.
         detector_nearest -> Euclidean^2 in STAR_X/STAR_Y; nearest -> small-field RA/Dec."""
         if self.grouping_mode == "detector_nearest":
-            xy = self.detxy[pool]                                                  # (n, 2) detector px
+            xy = self.detxy[pool]                                                  # (n, 2) DETECTOR_X/Y px
             if not np.isfinite(xy).all():
-                raise RuntimeError("detector_nearest: non-finite STAR_X/STAR_Y in pool -- fix the data")
+                raise RuntimeError("detector_nearest: non-finite DETECTOR_X/DETECTOR_Y in pool -- fix the data")
             diff = xy[:, None, :] - xy[None, :, :]
             return (diff ** 2).sum(-1)                                             # Euclidean^2
         rd = self.radec[pool]
@@ -81,25 +86,33 @@ class AreaGroupLOODataset(Dataset):
         return dra ** 2 + (dec[:, None] - dec[None, :]) ** 2                       # ang. dist^2
 
     def _build_local_groups(self):
-        """Per area: one anchor-centered group per pool star = the group_size nearest
-        stars (incl. the anchor) by the mode's distance, restricted to the same area
-        (=> same sector/camera/ccd, since area = camera*100+ccd*10+bin). The dataset is
-        already per-split, so groups never cross train/val/test. Deterministic; groups
-        overlap (not disjoint) and every pool star serves as an anchor (capped at n_stars)."""
+        """Per area: one anchor-centered group per pool star = the group_size nearest stars
+        (incl. the anchor) by the mode's distance, restricted to the same area (=> same
+        sector/camera/ccd since area = camera*100+ccd*10+bin) and the same split (per-split
+        dataset). The pool is already capped at n_stars. Groups overlap but EXACT-duplicate
+        groups are removed. Records per-area stats in self.group_stats."""
         gs = self.group_size
-        groups = {}
+        groups, self.group_stats = {}, {}
         for a in self.eligible:
             pool = self.pool[a]
+            assert len(pool) <= self.n_stars, f"area {a} pool {len(pool)} > n_stars {self.n_stars}"
             if len(pool) < gs:
                 continue
             d2 = self._pool_pairwise_d2(pool)
             order = np.argsort(d2, axis=1, kind="stable")[:, :gs]                  # nearest gs incl self
-            n_anchor = min(len(pool), self.n_stars)          # cap: up to ~n_stars anchor groups/area
-            if n_anchor < len(pool):
-                anchors = np.random.default_rng([self.base_seed, a]).choice(len(pool), size=n_anchor, replace=False)
-            else:
-                anchors = np.arange(len(pool))
-            groups[a] = [pool[order[i]].astype(np.int64) for i in anchors]
+            seen, glist, nd = set(), [], []
+            for i in range(len(pool)):                        # every pool star anchors one group
+                sel = pool[order[i]].astype(np.int64)
+                key = frozenset(int(x) for x in sel)
+                if key in seen:                               # drop exact-duplicate group
+                    continue
+                seen.add(key); glist.append(sel)
+                nd.append(np.sqrt(d2[i, order[i, 1:]]))       # anchor -> its 15 neighbor distances
+            groups[a] = glist
+            nd = np.concatenate(nd) if nd else np.zeros(0)
+            self.group_stats[a] = {"pool": int(len(pool)), "groups": int(len(glist)),
+                                   "med_dist": float(np.median(nd)) if nd.size else float("nan"),
+                                   "max_dist": float(nd.max()) if nd.size else float("nan")}
         return groups
 
     def _build(self, epoch):

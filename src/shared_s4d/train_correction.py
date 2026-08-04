@@ -19,11 +19,12 @@ from src.instrument_v2.area_commonmode_dataset import Sector14GroupStatDataset, 
 from src.instrument_v2.sector14_dataset import ensure_splits, ensure_time_range
 from src.instrument_v2.train_sector14_jepa import git_commit, seed_worker, effective_rank
 from src.shared_s4d.ae_dataset import AreaGroupAEDataset
-from src.shared_s4d.model import build_model, preprocessing_config, GRID, LATENT_DIM, N_TOKENS, TOKEN_DIM
+from src.shared_s4d.model import (build_model, preprocessing_config, experiment_tag,
+                                  GRID, LATENT_DIM, N_TOKENS, TOKEN_DIM)
 from src.shared_s4d.correction_losses import (
     masked_pairwise_residual_correlation, normalized_correction_energy, mean_abs_pairwise_corr,
     topk_fixed_cov_loss, relative_correction_size,
-    windowed_group_cov_loss, soft_cap_size)
+    windowed_group_cov_loss, pairwise_window_cov_loss, soft_cap_size)
 
 
 SEED = int(os.environ.get("SEED", "0"))
@@ -35,7 +36,7 @@ LR = float(os.environ.get("LR", "1e-3"))
 LAMBDA_SIZE = float(os.environ.get("LAMBDA_SIZE", "0.01"))
 LOSS_MODE = os.environ.get("LOSS_MODE", "topk_fixed_cov")     # topk_fixed_cov | legacy_corr
 TOPK_PEERS = int(os.environ.get("TOPK_PEERS", "8"))
-assert LOSS_MODE in ("topk_fixed_cov", "legacy_corr", "windowed_group_cov"), LOSS_MODE
+assert LOSS_MODE in ("topk_fixed_cov", "legacy_corr", "windowed_group_cov", "pairwise_window_cov"), LOSS_MODE
 MIN_OVERLAP = int(os.environ.get("MIN_OVERLAP", "64"))          # min shared observed cadences per pair
 NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "4"))
 REQUIRE_FULL = os.environ.get("REQUIRE_FULL", "1").lower() not in ("0", "false", "no")
@@ -55,6 +56,9 @@ def group_losses(residuals, corrections, curves, masks):
     if LOSS_MODE == "topk_fixed_cov":
         shared = topk_fixed_cov_loss(residuals, curves, masks, TOPK_PEERS, MIN_OVERLAP)
         size = relative_correction_size(corrections, curves, masks)
+    elif LOSS_MODE == "pairwise_window_cov":
+        shared = pairwise_window_cov_loss(residuals, curves, masks)   # square-before-average, all windows
+        size = soft_cap_size(corrections, curves, masks)      # run this mode with LAMBDA_SIZE=0.1
     elif LOSS_MODE == "windowed_group_cov":
         shared = windowed_group_cov_loss(residuals, curves, masks)
         size = soft_cap_size(corrections, curves, masks)      # run this mode with LAMBDA_SIZE=0.1
@@ -89,6 +93,7 @@ def run_train_epoch(model, loader, optimizer, scaler):
 def val_metrics(model, loader):
     model.eval()
     befs, afts, ratios, caps, shareds, sizes, lat_chunks = [], [], [], [], [], [], []
+    pwbs, pwas, ers = [], [], []
     with torch.no_grad():
         for bi, (Xg, Mg) in enumerate(loader):
             if MAX_BATCHES and bi >= MAX_BATCHES:
@@ -96,10 +101,14 @@ def val_metrics(model, loader):
             Xg = Xg.squeeze(0).to(DEVICE); Mg = Mg.squeeze(0).to(DEVICE)
             corrections, lat = model(Xg, Mg)
             residuals = Xg - corrections
-            befs.append(mean_abs_pairwise_corr(Xg, Mg, MIN_OVERLAP))
+            # PRIMARY metric: the exact pairwise-window loss before (c=0 -> r=x) and after
+            pwbs.append(float(pairwise_window_cov_loss(Xg, Xg, Mg)))
+            pwas.append(float(pairwise_window_cov_loss(residuals, Xg, Mg)))
+            befs.append(mean_abs_pairwise_corr(Xg, Mg, MIN_OVERLAP))    # secondary: full-curve corr
             afts.append(mean_abs_pairwise_corr(residuals, Mg, MIN_OVERLAP))
             sh, sz = group_losses(residuals, corrections, Xg, Mg)
             shareds.append(float(sh)); sizes.append(float(sz))
+            ers.append(float(relative_correction_size(corrections, Xg, Mg)))   # raw energy ratio
 
             m = (Mg > 0).float()
             crms = torch.sqrt((m * corrections ** 2).sum(1) / m.sum(1).clamp(min=1.0))
@@ -111,9 +120,13 @@ def val_metrics(model, loader):
             caps.append(float((energy_ratio > 0.5).float().mean()))   # fraction over the 0.5 soft cap
             lat_chunks.append(lat.cpu().numpy())
     bef = float(np.nanmean(befs)); aft = float(np.nanmean(afts))
+    pwb = float(np.mean(pwbs)); pwa = float(np.mean(pwas))
     Z = np.concatenate(lat_chunks, 0); shared = float(np.mean(shareds)); size = float(np.mean(sizes))
     return {"corr_before": bef, "corr_after": aft,
             "pct_reduction": float(100.0 * (bef - aft) / bef) if bef > 1e-8 else float("nan"),
+            "pw_before": pwb, "pw_after": pwa,
+            "pw_reduction": float(100.0 * (pwb - pwa) / pwb) if pwb > 1e-12 else float("nan"),
+            "energy_ratio": float(np.mean(ers)),
             "corr_rms_over_input_rms": float(np.mean(ratios)), "frac_over_cap": float(np.mean(caps)),
             "shared_loss": shared, "size_loss": size, "total_loss": shared + LAMBDA_SIZE * size,
             "latent_std": float(Z.std(0).mean()), "effective_rank": float(effective_rank(Z))}
@@ -122,8 +135,7 @@ def val_metrics(model, loader):
 def main():
     random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
     os.makedirs(ART_DIR, exist_ok=True); os.makedirs(CKPT_DIR, exist_ok=True)
-    tag = (f"shared_s4d_corr_{LOSS_MODE}_{GROUPING_MODE}_g{GROUP_SIZE}"
-           f"_t{N_TOKENS}_z{TOKEN_DIM}_lam{LAMBDA_SIZE}_s{SEED}")
+    tag = experiment_tag(LOSS_MODE, GROUPING_MODE, GROUP_SIZE, N_TOKENS, TOKEN_DIM, LAMBDA_SIZE, SEED)
     ckpt_base = os.path.join(CKPT_DIR, tag)
     print(f"git {git_commit()}  tag {tag}  device {DEVICE}  loss {LOSS_MODE} grouping {GROUPING_MODE} "
           f"g{GROUP_SIZE} tokens {N_TOKENS}x{TOKEN_DIM}=z{LATENT_DIM} topk {TOPK_PEERS}  "
@@ -150,18 +162,19 @@ def main():
         sub = df.set_index(df["TIC"].astype(str))
         return sub.loc[[str(t) for t in tics], ["ra", "dec"]].to_numpy(dtype=float)
 
-    def detxy_for(tics):                                         # detector STAR_X/STAR_Y aligned to stars
+    def detxy_for(tics):                                         # physical DETECTOR_X/DETECTOR_Y per star
         if GROUPING_MODE != "detector_nearest":
             return None
-        if not {"STAR_X", "STAR_Y"} <= set(df.columns):
+        if not {"DETECTOR_X", "DETECTOR_Y"} <= set(df.columns):
             raise RuntimeError(
-                "GROUPING_MODE=detector_nearest but the parquet has no STAR_X/STAR_Y columns. "
-                "Detector coordinates are NOT in the current dataset -- REGENERATE it: add "
-                "STAR_X/STAR_Y in src/tglc/extract_raw_parquet_cadence.py (from the FITS primary "
-                "header, next to CAMERA/CCD/RA_OBJ), rerun the extractor, and rebuild the "
-                "dense_v2 split. Refusing to fall back to RA/Dec.")
+                "GROUPING_MODE=detector_nearest but the parquet has no DETECTOR_X/DETECTOR_Y columns. "
+                "Regenerate the parquet with src/tglc/merge_detector_positions.py (RA/Dec -> TESS "
+                "detector col/row via tess-point). Refusing to fall back to RA/Dec or random.")
         sub = df.set_index(df["TIC"].astype(str))
-        return sub.loc[[str(t) for t in tics], ["STAR_X", "STAR_Y"]].to_numpy(dtype=float)
+        xy = sub.loc[[str(t) for t in tics], ["DETECTOR_X", "DETECTOR_Y"]].to_numpy(dtype=float)
+        if not np.isfinite(xy).all():
+            raise RuntimeError("DETECTOR_X/DETECTOR_Y has non-finite values -- bad coordinate merge")
+        return xy
 
     train_ds = AreaGroupAEDataset(base_tr.X, base_tr.M, base_tr.areas, base_tr.tics,
                                   n_stars=N_STARS, group_size=GROUP_SIZE, seed=SEED,
@@ -173,22 +186,36 @@ def main():
                                 radec=radec_for(base_va.tics), detxy=detxy_for(base_va.tics))
     print(f"train: {len(train_ds.eligible)} areas -> {len(train_ds)} groups/epoch | "
           f"val: {len(val_ds.eligible)} areas -> {len(val_ds)} groups", flush=True)
+    if getattr(train_ds, "group_stats", None):                   # per-area: pool, groups, neighbor dist
+        gs = train_ds.group_stats
+        pools = [s["pool"] for s in gs.values()]; grps = [s["groups"] for s in gs.values()]
+        meds = [s["med_dist"] for s in gs.values()]; maxs = [s["max_dist"] for s in gs.values()]
+        print(f"group_stats over {len(gs)} areas: pool[min {min(pools)} max {max(pools)}] "
+              f"groups[min {min(grps)} max {max(grps)}] "
+              f"neighbor_dist med~{np.nanmedian(meds):.1f} max~{np.nanmax(maxs):.1f}", flush=True)
+        for a in sorted(gs)[:8]:                                  # first few areas verbatim
+            s = gs[a]; print(f"    area {a}: pool {s['pool']} groups {s['groups']} "
+                             f"med_dist {s['med_dist']:.1f} max_dist {s['max_dist']:.1f}", flush=True)
 
     model = build_model().to(DEVICE)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
-    scaler = torch.cuda.amp.GradScaler(enabled=USE_AMP)
+    scaler = torch.amp.GradScaler("cuda", enabled=USE_AMP)
 
     with open(os.path.join(ART_DIR, "preprocessing.json"), "w") as fh:
         json.dump(preprocessing_config(), fh, indent=2)
     fields = ["epoch", "train_total", "train_shared", "train_size", "val_total", "val_shared",
-              "val_size", "corr_before", "corr_after", "pct_reduction", "corr_rms_over_input_rms",
+              "val_size", "pw_before", "pw_after", "pw_reduction", "energy_ratio",
+              "corr_before", "corr_after", "pct_reduction", "corr_rms_over_input_rms",
               "frac_over_cap", "latent_std", "effective_rank"]
     metrics_path = os.path.join(ART_DIR, f"metrics_{tag}.csv")
     with open(metrics_path, "w", newline="") as fh:
         csv.DictWriter(fh, fieldnames=fields).writeheader()
 
-    best = {"val_total": float("inf"), "epoch": None}
+    # Select on the PAIRWISE-WINDOW loss REDUCTION (a near-zero correction gives ~0% reduction,
+    # so it cannot win), and reject epochs whose reduction is negligible.
+    MIN_PW_REDUCTION = float(os.environ.get("MIN_PW_REDUCTION", "1.0"))   # percent
+    best = {"pw_reduction": -float("inf"), "epoch": None}
     collapsed = False
     for epoch in range(1, EPOCHS + 1):
         train_ds.set_epoch(epoch)
@@ -206,36 +233,43 @@ def main():
             csv.DictWriter(fh, fieldnames=fields).writerow(
                 {"epoch": epoch, "train_total": tr_tot, "train_shared": tr_sh, "train_size": tr_sz,
                  "val_total": vm["total_loss"], "val_shared": vm["shared_loss"], "val_size": vm["size_loss"],
+                 "pw_before": vm["pw_before"], "pw_after": vm["pw_after"], "pw_reduction": vm["pw_reduction"],
+                 "energy_ratio": vm["energy_ratio"],
                  "corr_before": vm["corr_before"], "corr_after": vm["corr_after"],
                  "pct_reduction": vm["pct_reduction"], "corr_rms_over_input_rms": vm["corr_rms_over_input_rms"],
                  "frac_over_cap": vm["frac_over_cap"],
                  "latent_std": vm["latent_std"], "effective_rank": vm["effective_rank"]})
         marker = ""
-        if vm["total_loss"] < best["val_total"]:
-            best = {"val_total": vm["total_loss"], "epoch": epoch, "corr_before": vm["corr_before"],
-                    "corr_after": vm["corr_after"], "pct_reduction": vm["pct_reduction"],
-                    "corr_rms_over_input_rms": vm["corr_rms_over_input_rms"]}
-            torch.save({"model": model.state_dict(), "config": preprocessing_config(),
-                        "epoch": epoch, "lambda_size": LAMBDA_SIZE, "val_total": vm["total_loss"]},
-                       f"{ckpt_base}_best.pth")
+        pwr = vm["pw_reduction"]
+        if np.isfinite(pwr) and pwr >= MIN_PW_REDUCTION and pwr > best["pw_reduction"]:
+            best = {"pw_reduction": pwr, "epoch": epoch, "pw_before": vm["pw_before"],
+                    "pw_after": vm["pw_after"], "corr_before": vm["corr_before"], "corr_after": vm["corr_after"],
+                    "energy_ratio": vm["energy_ratio"], "corr_rms_over_input_rms": vm["corr_rms_over_input_rms"]}
+            torch.save({"model": model.state_dict(), "config": preprocessing_config(), "epoch": epoch,
+                        "lambda_size": LAMBDA_SIZE, "pw_reduction": pwr}, f"{ckpt_base}_best.pth")
             torch.save(model.encoder.state_dict(), f"{ckpt_base}_best_encoder.pth")
             torch.save(model.decoder.state_dict(), f"{ckpt_base}_best_decoder.pth")
             marker = " <- best"
-        print(f"[epoch {epoch:02d}] total={vm['total_loss']:.4f} shared={vm['shared_loss']:.4f} "
-              f"size={vm['size_loss']:.4f} corr {vm['corr_before']:.3f}->{vm['corr_after']:.3f} "
-              f"(-{vm['pct_reduction']:.0f}%) c/x_rms={vm['corr_rms_over_input_rms']:.3f} "
-              f"over_cap={vm['frac_over_cap']:.3f} lstd={vm['latent_std']:.3f} "
-              f"erank={vm['effective_rank']:.1f}{marker}", flush=True)
+        print(f"[epoch {epoch:02d}] pw {vm['pw_before']:.4f}->{vm['pw_after']:.4f} "
+              f"(-{vm['pw_reduction']:.1f}%) | corr {vm['corr_before']:.3f}->{vm['corr_after']:.3f} "
+              f"(-{vm['pct_reduction']:.0f}%) energy={vm['energy_ratio']:.3f} "
+              f"c/x_rms={vm['corr_rms_over_input_rms']:.3f} over_cap={vm['frac_over_cap']:.3f} "
+              f"lstd={vm['latent_std']:.3f} erank={vm['effective_rank']:.1f}{marker}", flush=True)
 
         if vm["latent_std"] < COLLAPSE_STD:
             print(f"!! LATENT COLLAPSE: std {vm['latent_std']:.2e} < {COLLAPSE_STD:.1e} -- stopping", flush=True)
             collapsed = True
             break
 
+    meaningful = best["epoch"] is not None                       # did any epoch clear MIN_PW_REDUCTION?
+    if not meaningful:
+        print(f"!! NO checkpoint reached >= {MIN_PW_REDUCTION}% pairwise-window reduction -- "
+              f"NOT a success (near-zero / ineffective correction)", flush=True)
     selection = {"tag": tag, "seed": SEED, "group_size": GROUP_SIZE, "latent_dim": LATENT_DIM,
                  "n_tokens": N_TOKENS, "token_dim": TOKEN_DIM,
                  "loss_mode": LOSS_MODE, "topk_peers": TOPK_PEERS, "grouping_mode": GROUPING_MODE,
                  "n_stars": N_STARS, "epochs": EPOCHS, "lambda_size": LAMBDA_SIZE, "min_overlap": MIN_OVERLAP,
+                 "min_pw_reduction": MIN_PW_REDUCTION, "meaningful_reduction": meaningful,
                  "require_full": REQUIRE_FULL, "collapsed": collapsed, "best": best,
                  "checkpoint": f"{ckpt_base}_best.pth", "encoder_checkpoint": f"{ckpt_base}_best_encoder.pth",
                  "decoder_checkpoint": f"{ckpt_base}_best_decoder.pth",

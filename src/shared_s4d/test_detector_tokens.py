@@ -31,7 +31,7 @@ def test_detector_neighbors_are_the_15_closest():
     X, M, areas, tics, detxy = _synth_area_dataset()
     ds = AreaGroupLOODataset(X, M, areas, tics, n_stars=1000, group_size=16,
                              require_full=False, grouping_mode="detector_nearest", detxy=detxy)
-    assert len(ds.items) == 60                                # 30 anchors x 2 areas
+    assert 0 < len(ds.items) <= 60                            # <=30 anchors x 2 areas (exact dups removed)
     for rows, a in ds.items:
         anchor = rows[0]                                      # anchor is its own nearest (dist 0)
         pool = np.where(areas == a)[0]
@@ -59,9 +59,9 @@ def test_detector_nearest_requires_detxy():
     X, M, areas, tics, _ = _synth_area_dataset()
     try:
         AreaGroupLOODataset(X, M, areas, tics, group_size=16, grouping_mode="detector_nearest")
-        raise AssertionError("expected RuntimeError when STAR_X/STAR_Y missing")
+        raise AssertionError("expected RuntimeError when DETECTOR_X/DETECTOR_Y missing")
     except RuntimeError as e:
-        assert "REGENERATED" in str(e) or "STAR_X" in str(e)
+        assert "DETECTOR_X" in str(e) or "Regenerate" in str(e)
 
 
 def test_real_detector_group_from_parquet():
