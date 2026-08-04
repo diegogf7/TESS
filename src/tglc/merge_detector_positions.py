@@ -103,12 +103,12 @@ def scan_tar(need_tic, need_gaia):
             if N_CAP and seen >= N_CAP:
                 break
     print(f"=== FITS field inspection (first {inspected}) ===\n" + "\n".join(log), flush=True)
-    xy = pd.DataFrame(rows, columns=["TIC", "STAR_X", "STAR_Y", "cam_hdr", "ccd_hdr"])
-    dup = int(xy["TIC"].duplicated().sum())
-    if dup:
-        print(f"WARNING: {dup} duplicate TICs in FITS matches -- keeping first", flush=True)
-    xy = xy.drop_duplicates("TIC")
-    print(f"scanned {seen} fits, opened {opened}, matched {len(xy)} unique TICs", flush=True)
+    xy = pd.DataFrame(rows, columns=["TIC", "STAR_X", "STAR_Y", "camera", "ccd"])
+    cross = int(xy["TIC"].duplicated().sum()) - int(xy.duplicated(["TIC", "camera", "ccd"]).sum())
+    xy = xy.drop_duplicates(["TIC", "camera", "ccd"])
+    if cross:
+        print(f"note: {cross} TICs appear under >1 camera/ccd -- resolved by the (TIC,camera,ccd) join", flush=True)
+    print(f"scanned {seen} fits, opened {opened}, matched {len(xy)} (TIC,camera,ccd) keys", flush=True)
     if len(xy):
         print(f"abs STAR_X range [{xy.STAR_X.min():.0f}, {xy.STAR_X.max():.0f}]  "
               f"STAR_Y [{xy.STAR_Y.min():.0f}, {xy.STAR_Y.max():.0f}]  (expect ~[0, 2048])", flush=True)
@@ -128,28 +128,26 @@ def main():
 
     xy = scan_tar(need_tic, need_gaia)
 
-    chk = meta.merge(xy, on="TIC", how="left")                   # validate join on scalars
+    chk = meta.merge(xy, on=["TIC", "camera", "ccd"], how="left")   # safe key: TIC + camera + CCD
     assert len(chk) == len(meta), "row count changed -- bad merge key"
     have = chk["STAR_X"].notna()
     coverage = float(have.mean())
     finite = bool(np.isfinite(chk.loc[have, ["STAR_X", "STAR_Y"]].to_numpy()).all())
-    cam_ok = bool((chk.loc[have, "cam_hdr"] == chk.loc[have, "camera"]).all())
-    ccd_ok = bool((chk.loc[have, "ccd_hdr"] == chk.loc[have, "ccd"]).all())
-    print(f"coverage {coverage:.4f} | finite {finite} | camera-consistent {cam_ok} | ccd-consistent {ccd_ok}",
-          flush=True)
+    print(f"coverage {coverage:.4f} | finite {finite} | joined on (TIC,camera,ccd) "
+          f"-> coords are camera/CCD-consistent by construction", flush=True)
 
     if N_CAP:
         print(f"dry run (N={N_CAP}) -- inspection + range + partial coverage shown, NOT writing", flush=True)
         return
     if coverage < MIN_COVERAGE:
         raise SystemExit(f"FATAL: STAR_X/STAR_Y coverage {coverage:.4f} < {MIN_COVERAGE} -- insufficient")
-    if not (finite and cam_ok and ccd_ok):
-        raise SystemExit("FATAL: non-finite coords or camera/CCD mismatch -- refusing to write")
+    if not finite:
+        raise SystemExit("FATAL: non-finite coordinates -- refusing to write")
 
     # Real write: read the FULL cadence parquet once and add the two columns
     df = pd.read_parquet(IN_PARQUET)
     df["TIC"] = df["TIC"].astype(str)
-    merged = df.merge(xy[["TIC", "STAR_X", "STAR_Y"]], on="TIC", how="left")
+    merged = df.merge(xy[["TIC", "camera", "ccd", "STAR_X", "STAR_Y"]], on=["TIC", "camera", "ccd"], how="left")
     assert len(merged) == len(df), "row count changed on full merge"
     merged.to_parquet(OUT_PARQUET)
     print(f"wrote {OUT_PARQUET} ({len(merged)} rows, +STAR_X/STAR_Y, coverage {coverage:.4f})", flush=True)
