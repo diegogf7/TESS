@@ -127,6 +127,29 @@ class S4D(nn.Module):
             y = y.transpose(-1, -2)
         return y, None 
 
+def masked_token_pool(x, mask, n_tokens, with_std=False):
+    """Split the time axis of x (B, L, D) into n_tokens ORDERED consecutive blocks of
+    L//n_tokens cadences and take the MASKED mean within each block -> (B, n_tokens, D).
+    A fully-masked (all missing) block returns a ZERO token, never NaN, because the
+    denominator is clamped to >=1. Missing cadences never contribute to a token. With
+    with_std=True the per-block std is concatenated (mean_std readout)."""
+    B, L, D = x.shape
+    N = int(n_tokens)
+    xr = x.reshape(B, N, L // N, D)                       # (B, N, block, D) -- consecutive blocks
+    if mask is not None:
+        mf = mask.reshape(B, N, L // N, 1).to(x.dtype)
+        denom = mf.sum(dim=2).clamp(min=1)               # empty block -> denom 1, numerator 0 -> zero token
+        mean = (xr * mf).sum(dim=2) / denom
+        if with_std:
+            var = (((xr - mean.unsqueeze(2)) ** 2) * mf).sum(dim=2) / denom
+            return torch.cat([mean, (var + 1e-6).sqrt()], dim=-1)
+        return mean
+    mean = xr.mean(dim=2)
+    if with_std:
+        return torch.cat([mean, xr.std(dim=2)], dim=-1)
+    return mean
+
+
 class S4Model(nn.Module):
     def __init__(
             self, 
@@ -193,30 +216,11 @@ class S4Model(nn.Module):
             if not self.prenorm:
                 x = norm(x.transpose(-1, -2)).transpose(-1,-2)
         
-        x = x.transpose(-1,-2)
+        x = x.transpose(-1,-2)                                    # (B, L, D) time-resolved features
 
-        B, L, D = x.shape
-        N = self.n_tokens
-
-        x = x.reshape(B, N, L // N, D)
-
-        if mask is not None:
-            mask_f = mask.reshape(B, N, L // N, 1).to(x.dtype)
-            denom = mask_f.sum(dim = 2).clamp(min = 1)
-            mean = (x * mask_f).sum(dim = 2) / denom
-            if self.readout == "mean_std":
-                var = (((x - mean.unsqueeze(2)) ** 2) * mask_f).sum(dim = 2) / denom
-                pooled = torch.cat([mean, (var + 1e-6).sqrt()], dim = -1)
-            else:
-                pooled = mean
-        else:
-            mean = x.mean(dim = 2)
-            if self.readout == "mean_std":
-                pooled = torch.cat([mean, x.std(dim = 2)], dim = -1)
-            else:
-                pooled = mean
-
-        tokens = self.decoder(pooled)
+        pooled = masked_token_pool(x, mask, self.n_tokens,
+                                   with_std=(self.readout == "mean_std"))
+        tokens = self.decoder(pooled)                            # shared Linear(d_model -> token_dim) per token
         return tokens
 
         

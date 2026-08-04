@@ -19,7 +19,7 @@ from src.instrument_v2.area_commonmode_dataset import Sector14GroupStatDataset, 
 from src.instrument_v2.sector14_dataset import ensure_splits, ensure_time_range
 from src.instrument_v2.train_sector14_jepa import git_commit, seed_worker, effective_rank
 from src.shared_s4d.ae_dataset import AreaGroupAEDataset
-from src.shared_s4d.model import build_model, preprocessing_config, GRID, LATENT_DIM
+from src.shared_s4d.model import build_model, preprocessing_config, GRID, LATENT_DIM, N_TOKENS, TOKEN_DIM
 from src.shared_s4d.correction_losses import (
     masked_pairwise_residual_correlation, normalized_correction_energy, mean_abs_pairwise_corr,
     topk_fixed_cov_loss, relative_correction_size,
@@ -122,10 +122,12 @@ def val_metrics(model, loader):
 def main():
     random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
     os.makedirs(ART_DIR, exist_ok=True); os.makedirs(CKPT_DIR, exist_ok=True)
-    tag = f"shared_s4d_corr_{LOSS_MODE}_{GROUPING_MODE}_g{GROUP_SIZE}_z{LATENT_DIM}_lam{LAMBDA_SIZE}_s{SEED}"
+    tag = (f"shared_s4d_corr_{LOSS_MODE}_{GROUPING_MODE}_g{GROUP_SIZE}"
+           f"_t{N_TOKENS}_z{TOKEN_DIM}_lam{LAMBDA_SIZE}_s{SEED}")
     ckpt_base = os.path.join(CKPT_DIR, tag)
     print(f"git {git_commit()}  tag {tag}  device {DEVICE}  loss {LOSS_MODE} grouping {GROUPING_MODE} "
-          f"g{GROUP_SIZE} topk {TOPK_PEERS}  lambda_size {LAMBDA_SIZE}  min_overlap {MIN_OVERLAP}  "
+          f"g{GROUP_SIZE} tokens {N_TOKENS}x{TOKEN_DIM}=z{LATENT_DIM} topk {TOPK_PEERS}  "
+          f"lambda_size {LAMBDA_SIZE}  min_overlap {MIN_OVERLAP}  "
           f"require_full {REQUIRE_FULL}  amp {USE_AMP}", flush=True)
 
     df = pd.read_parquet(S14_DATA)
@@ -148,14 +150,27 @@ def main():
         sub = df.set_index(df["TIC"].astype(str))
         return sub.loc[[str(t) for t in tics], ["ra", "dec"]].to_numpy(dtype=float)
 
+    def detxy_for(tics):                                         # detector STAR_X/STAR_Y aligned to stars
+        if GROUPING_MODE != "detector_nearest":
+            return None
+        if not {"STAR_X", "STAR_Y"} <= set(df.columns):
+            raise RuntimeError(
+                "GROUPING_MODE=detector_nearest but the parquet has no STAR_X/STAR_Y columns. "
+                "Detector coordinates are NOT in the current dataset -- REGENERATE it: add "
+                "STAR_X/STAR_Y in src/tglc/extract_raw_parquet_cadence.py (from the FITS primary "
+                "header, next to CAMERA/CCD/RA_OBJ), rerun the extractor, and rebuild the "
+                "dense_v2 split. Refusing to fall back to RA/Dec.")
+        sub = df.set_index(df["TIC"].astype(str))
+        return sub.loc[[str(t) for t in tics], ["STAR_X", "STAR_Y"]].to_numpy(dtype=float)
+
     train_ds = AreaGroupAEDataset(base_tr.X, base_tr.M, base_tr.areas, base_tr.tics,
                                   n_stars=N_STARS, group_size=GROUP_SIZE, seed=SEED,
-                                  require_full=REQUIRE_FULL, resample=True,
-                                  grouping_mode=GROUPING_MODE, radec=radec_for(base_tr.tics))
+                                  require_full=REQUIRE_FULL, resample=True, grouping_mode=GROUPING_MODE,
+                                  radec=radec_for(base_tr.tics), detxy=detxy_for(base_tr.tics))
     val_ds = AreaGroupAEDataset(base_va.X, base_va.M, base_va.areas, base_va.tics,
                                 n_stars=N_STARS, group_size=GROUP_SIZE, seed=SEED,
-                                require_full=False, resample=False,
-                                grouping_mode=GROUPING_MODE, radec=radec_for(base_va.tics))
+                                require_full=False, resample=False, grouping_mode=GROUPING_MODE,
+                                radec=radec_for(base_va.tics), detxy=detxy_for(base_va.tics))
     print(f"train: {len(train_ds.eligible)} areas -> {len(train_ds)} groups/epoch | "
           f"val: {len(val_ds.eligible)} areas -> {len(val_ds)} groups", flush=True)
 
@@ -218,6 +233,7 @@ def main():
             break
 
     selection = {"tag": tag, "seed": SEED, "group_size": GROUP_SIZE, "latent_dim": LATENT_DIM,
+                 "n_tokens": N_TOKENS, "token_dim": TOKEN_DIM,
                  "loss_mode": LOSS_MODE, "topk_peers": TOPK_PEERS, "grouping_mode": GROUPING_MODE,
                  "n_stars": N_STARS, "epochs": EPOCHS, "lambda_size": LAMBDA_SIZE, "min_overlap": MIN_OVERLAP,
                  "require_full": REQUIRE_FULL, "collapsed": collapsed, "best": best,
