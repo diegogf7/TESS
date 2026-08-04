@@ -64,6 +64,32 @@ def test_detector_nearest_requires_detxy():
         assert "REGENERATED" in str(e) or "STAR_X" in str(e)
 
 
+def test_real_detector_group_from_parquet():
+    """Load the merged xy parquet (cluster only) and build one REAL detector-nearest group.
+    Skips where the parquet is absent (e.g. local runs)."""
+    import os
+    import pandas as pd
+    path = os.environ.get("DETXY_PARQUET",
+                          "/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_cadence_s14_dense_v2_xy.parquet")
+    if not os.path.exists(path):
+        print("  (skip test_real_detector_group_from_parquet -- no xy parquet here)"); return
+    df = pd.read_parquet(path, columns=["TIC", "camera", "ccd", "STAR_X", "STAR_Y"])
+    df = df.dropna(subset=["STAR_X", "STAR_Y"]).drop_duplicates("TIC")
+    (cam, ccd) = df.groupby(["camera", "ccd"]).size().sort_values().index[-1]     # densest chip
+    sub = df[(df.camera == cam) & (df.ccd == ccd)].head(300).reset_index(drop=True)
+    n = len(sub)
+    detxy = sub[["STAR_X", "STAR_Y"]].to_numpy(float)
+    areas = np.full(n, int(cam) * 100 + int(ccd) * 10, np.int64)                  # single pool
+    ds = AreaGroupLOODataset(np.zeros((n, 8), np.float32), np.ones((n, 8), np.float32),
+                             areas, sub["TIC"].to_numpy().astype(str), n_stars=1000, group_size=16,
+                             require_full=False, grouping_mode="detector_nearest", detxy=detxy)
+    assert len(ds.items) > 0
+    rows, _a = ds.items[0]; anchor = rows[0]
+    d = np.sqrt(((detxy - detxy[anchor]) ** 2).sum(1))
+    assert set(rows.tolist()) == set(np.argsort(d, kind="stable")[:16].tolist()) and len(rows) == 16
+    print(f"  real detector group OK (cam{cam} ccd{ccd}, {n} stars)")
+
+
 # ---- temporal-token pooling -------------------------------------------------
 def test_masked_pool_ignores_missing_cadences():
     B, L, D, N = 2, 1024, 4, 8; blk = L // N

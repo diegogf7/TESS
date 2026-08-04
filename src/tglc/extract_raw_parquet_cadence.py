@@ -30,23 +30,16 @@ N_WORKERS = int(os.environ.get("N_WORKERS", "16"))
 
 EXTRA_COLUMNS = ("cadence_num", "TESS_flags", "TGLC_flags", "background")
 
-# Detector on-CCD position of the star (scalar, from the FITS PRIMARY header, like CAMERA/CCD).
-# TGLC exposes this as header cards; the exact card name can vary by product version, so we try
-# a few candidates and store whichever is present as STAR_X / STAR_Y. If ALL rows come back NaN,
-# the end-of-run WARNING fires -- run `python -m src.tglc.inspect_fits <one.fits>` to read the
-# real card names and add them to POS_X_KEYS / POS_Y_KEYS below.
-POS_X_KEYS = ("STAR_X", "CCD_X", "CCDCOL", "COLPIX", "CX", "COL")
-POS_Y_KEYS = ("STAR_Y", "CCD_Y", "CCDROW", "ROWPIX", "CY", "ROW")
-
-
-def _header_pos(head, keys):
-    for k in keys:
-        if k in head:
-            try:
-                return float(head[k])
-            except (TypeError, ValueError):
-                pass
-    return float("nan")
+# ABSOLUTE detector position of the star on the CCD (for detector_nearest grouping). The TGLC
+# primary header stores STAR_X/STAR_Y = the star's position WITHIN its CUTSIZE-px FFI cutout (a
+# few px) plus CUT_X/CUT_Y = the cutout's tile index. Absolute CCD pixel = CUT_* * CUTSIZE + STAR_*.
+def _detector_xy(head):
+    try:
+        cutsize = float(head["CUTSIZE"])
+        return (float(head["CUT_X"]) * cutsize + float(head["STAR_X"]),
+                float(head["CUT_Y"]) * cutsize + float(head["STAR_Y"]))
+    except (KeyError, TypeError, ValueError):
+        return float("nan"), float("nan")
 
 
 if os.path.exists(OUT_PATH):
@@ -79,9 +72,8 @@ def extract_one(path):
                 "ccd": int(head.get("CCD", -1)),
                 "ra": float(head.get("RA_OBJ", float("nan"))),
                 "dec": float(head.get("DEC_OBJ", float("nan"))),
-                "STAR_X": _header_pos(head, POS_X_KEYS),   # detector column pixel (for detector_nearest grouping)
-                "STAR_Y": _header_pos(head, POS_Y_KEYS),   # detector row pixel
             }
+            row["STAR_X"], row["STAR_Y"] = _detector_xy(head)   # absolute CCD pixels (detector_nearest)
             for col in EXTRA_COLUMNS:
                 if col in available:
                     values = np.asarray(data[col])
