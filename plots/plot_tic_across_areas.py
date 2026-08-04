@@ -36,7 +36,7 @@ ALL_PARQUET = os.environ.get(
 POSITIONS = os.environ.get(
     "POSITIONS",
     "/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_positions.parquet")
-MAX_PANELS = int(os.environ.get("MAX_PANELS", "6"))
+MAX_PANELS = int(os.environ.get("MAX_PANELS", "20"))
 OUT = os.environ.get("OUT", os.path.join(os.path.dirname(__file__), "tic_across_areas.png"))
 
 
@@ -74,6 +74,8 @@ def main():
     if tic is None:
         key = pd.read_parquet(ALL_PARQUET, columns=["TIC", "sector"])
         n_sectors = key.astype({"TIC": str}).groupby("TIC")["sector"].nunique()
+        print("most-observed TICs (TIC: #sectors):")
+        print(n_sectors.sort_values(ascending=False).head(10).to_string())
         tic = str(n_sectors.idxmax())
         print(f"auto-picked TIC {tic} ({int(n_sectors.max())} sectors)")
 
@@ -89,7 +91,7 @@ def main():
     fig, axes = plt.subplots(n, 1, figsize=(11, 1.8 * n), sharex=True)
     axes = np.atleast_1d(axes)
     for ax, (_, row) in zip(axes, star.iterrows()):
-        ax.plot(grid_curve(row["time"], row["flux"]), lw=0.6)
+        ax.plot(grid_curve(row["time"], row["flux"]), ls="none", marker=".", ms=1.8)
         ax.axhline(0, color="k", lw=0.3, alpha=0.4)
         area = int(row["area"])
         label = f"s{int(row['sector'])}" + (f"\narea {area}" if area != -1 else "")
