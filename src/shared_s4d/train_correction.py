@@ -144,6 +144,11 @@ def main():
 
     df = pd.read_parquet(S14_DATA)
     df = df[df["sector"] == 14].drop_duplicates("TIC").reset_index(drop=True)
+    if GROUPING_MODE == "detector_nearest" and {"DETECTOR_X", "DETECTOR_Y"} <= set(df.columns):
+        n0 = len(df)                                          # drop the rare boundary star with NaN coords
+        df = df[np.isfinite(df["DETECTOR_X"]) & np.isfinite(df["DETECTOR_Y"])].reset_index(drop=True)
+        if len(df) < n0:
+            print(f"dropped {n0 - len(df)} stars with non-finite DETECTOR_X/Y", flush=True)
     df = ensure_area_column(df)
     train_tics, val_tics, test_tics = ensure_splits(SPLIT_DIR, BASE_ART_DIR)
     t_range = ensure_time_range(BASE_ART_DIR, df, train_tics)
