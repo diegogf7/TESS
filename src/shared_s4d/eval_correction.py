@@ -196,7 +196,7 @@ def main():
         sub = df.set_index(df["TIC"].astype(str))
         return sub.loc[[str(t) for t in base_va.tics], cols].to_numpy(dtype=float)
     radec = coords(["ra", "dec"]) if GROUPING_MODE == "nearest" else None
-    detxy = coords(["STAR_X", "STAR_Y"]) if GROUPING_MODE == "detector_nearest" else None
+    detxy = coords(["DETECTOR_X", "DETECTOR_Y"]) if GROUPING_MODE == "detector_nearest" else None
     val_ds = AreaGroupAEDataset(base_va.X, base_va.M, base_va.areas, base_va.tics,
                                 n_stars=N_STARS, group_size=GROUP_SIZE, seed=SEED,
                                 require_full=False, resample=False,
