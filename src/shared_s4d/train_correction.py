@@ -133,8 +133,10 @@ def main():
     df = ensure_area_column(df)
     train_tics, val_tics, test_tics = ensure_splits(SPLIT_DIR, BASE_ART_DIR)
     t_range = ensure_time_range(BASE_ART_DIR, df, train_tics)
-    base_tr = Sector14GroupStatDataset(df, train_tics, t_range, "area", GROUP_SIZE, min_valid=16)
-    base_va = Sector14GroupStatDataset(df, val_tics, t_range, "area", GROUP_SIZE, min_valid=16)
+    # base loader only supplies X/M/areas/tics; its own group_size is unrelated to the
+    # experiment's GROUP_SIZE -> fix it at 32 so min_valid=16 stays valid for GROUP_SIZE<16.
+    base_tr = Sector14GroupStatDataset(df, train_tics, t_range, "area", 32, min_valid=16)
+    base_va = Sector14GroupStatDataset(df, val_tics, t_range, "area", 32, min_valid=16)
     assert not (set(base_tr.tics) | set(base_va.tics)) & test_tics, "test TIC leaked"
 
     def radec_for(tics):                                         # RA/Dec aligned to the dataset's stars
