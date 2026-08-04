@@ -122,7 +122,7 @@ def main():
 
     df = pd.read_parquet(IN_PARQUET)                             # full read once, at write
     df["TIC"] = df["TIC"].astype(str)
-    xy = chk[["TIC", "camera", "ccd", "DETECTOR_X", "DETECTOR_Y"]]
+    xy = chk[["TIC", "camera", "ccd", "DETECTOR_X", "DETECTOR_Y"]].drop_duplicates(["TIC", "camera", "ccd"])
     merged = df.merge(xy, on=["TIC", "camera", "ccd"], how="left")
     assert len(merged) == len(df), "row count changed on full merge"
     merged.to_parquet(OUT_PARQUET)
