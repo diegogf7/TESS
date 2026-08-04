@@ -20,8 +20,9 @@ export N_STARS=${N_STARS:-1000}
 export EPOCHS=${EPOCHS:-30}
 export LAMBDA_SIZE=${LAMBDA_SIZE:-0.5}       # new loss scale differs -- sweep 0.3/0.5/0.7/1.0 (do NOT assume 0.7)
 export MIN_OVERLAP=${MIN_OVERLAP:-64}
-export LOSS_MODE=${LOSS_MODE:-topk_fixed_cov}   # topk_fixed_cov | legacy_corr
+export LOSS_MODE=${LOSS_MODE:-topk_fixed_cov}   # topk_fixed_cov | legacy_corr | windowed_group_cov
 export TOPK_PEERS=${TOPK_PEERS:-8}
+export GROUPING_MODE=${GROUPING_MODE:-random}   # random | nearest (RA/Dec anchor groups)
 export REQUIRE_FULL=${REQUIRE_FULL:-1}       # 0 = all available stars/area (dense_v2 has areas < 1000)
 DENSE_V2=/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_cadence_s14_dense_v2.parquet
 export S14_DATA=${S14_DATA:-$DENSE_V2}

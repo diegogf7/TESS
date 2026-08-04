@@ -28,6 +28,7 @@ from src.shared_s4d.correction_losses import (
 
 SEED = int(os.environ.get("SEED", "0"))
 GROUP_SIZE = int(os.environ.get("GROUP_SIZE", "32"))
+GROUPING_MODE = os.environ.get("GROUPING_MODE", "random")       # random | nearest (RA/Dec anchor groups)
 N_STARS = int(os.environ.get("N_STARS", "1000"))
 EPOCHS = int(os.environ.get("EPOCHS", "30"))
 LR = float(os.environ.get("LR", "1e-3"))
@@ -87,7 +88,7 @@ def run_train_epoch(model, loader, optimizer, scaler):
 
 def val_metrics(model, loader):
     model.eval()
-    befs, afts, ratios, shareds, sizes, lat_chunks = [], [], [], [], [], []
+    befs, afts, ratios, caps, shareds, sizes, lat_chunks = [], [], [], [], [], [], []
     with torch.no_grad():
         for bi, (Xg, Mg) in enumerate(loader):
             if MAX_BATCHES and bi >= MAX_BATCHES:
@@ -104,12 +105,16 @@ def val_metrics(model, loader):
             crms = torch.sqrt((m * corrections ** 2).sum(1) / m.sum(1).clamp(min=1.0))
             xrms = torch.sqrt((m * Xg ** 2).sum(1) / m.sum(1).clamp(min=1.0))
             ratios.append(float((crms / xrms.clamp(min=1e-8)).mean()))
+            xmean = (Xg * m).sum(1) / m.sum(1).clamp(min=1.0)     # soft-cap ratio = mean(c^2)/var(x)
+            xvar = (((Xg - xmean[:, None]) * m) ** 2).sum(1) / m.sum(1).clamp(min=1.0) + 1e-6
+            energy_ratio = (m * corrections ** 2).sum(1) / m.sum(1).clamp(min=1.0) / xvar
+            caps.append(float((energy_ratio > 0.5).float().mean()))   # fraction over the 0.5 soft cap
             lat_chunks.append(lat.cpu().numpy())
     bef = float(np.nanmean(befs)); aft = float(np.nanmean(afts))
     Z = np.concatenate(lat_chunks, 0); shared = float(np.mean(shareds)); size = float(np.mean(sizes))
     return {"corr_before": bef, "corr_after": aft,
             "pct_reduction": float(100.0 * (bef - aft) / bef) if bef > 1e-8 else float("nan"),
-            "corr_rms_over_input_rms": float(np.mean(ratios)),
+            "corr_rms_over_input_rms": float(np.mean(ratios)), "frac_over_cap": float(np.mean(caps)),
             "shared_loss": shared, "size_loss": size, "total_loss": shared + LAMBDA_SIZE * size,
             "latent_std": float(Z.std(0).mean()), "effective_rank": float(effective_rank(Z))}
 
@@ -117,10 +122,11 @@ def val_metrics(model, loader):
 def main():
     random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
     os.makedirs(ART_DIR, exist_ok=True); os.makedirs(CKPT_DIR, exist_ok=True)
-    tag = f"shared_s4d_corr_{LOSS_MODE}_g{GROUP_SIZE}_z{LATENT_DIM}_lam{LAMBDA_SIZE}_s{SEED}"
+    tag = f"shared_s4d_corr_{LOSS_MODE}_{GROUPING_MODE}_g{GROUP_SIZE}_z{LATENT_DIM}_lam{LAMBDA_SIZE}_s{SEED}"
     ckpt_base = os.path.join(CKPT_DIR, tag)
-    print(f"git {git_commit()}  tag {tag}  device {DEVICE}  loss {LOSS_MODE} topk {TOPK_PEERS}  "
-          f"lambda_size {LAMBDA_SIZE}  min_overlap {MIN_OVERLAP}  require_full {REQUIRE_FULL}  amp {USE_AMP}", flush=True)
+    print(f"git {git_commit()}  tag {tag}  device {DEVICE}  loss {LOSS_MODE} grouping {GROUPING_MODE} "
+          f"g{GROUP_SIZE} topk {TOPK_PEERS}  lambda_size {LAMBDA_SIZE}  min_overlap {MIN_OVERLAP}  "
+          f"require_full {REQUIRE_FULL}  amp {USE_AMP}", flush=True)
 
     df = pd.read_parquet(S14_DATA)
     df = df[df["sector"] == 14].drop_duplicates("TIC").reset_index(drop=True)
@@ -131,12 +137,23 @@ def main():
     base_va = Sector14GroupStatDataset(df, val_tics, t_range, "area", GROUP_SIZE, min_valid=16)
     assert not (set(base_tr.tics) | set(base_va.tics)) & test_tics, "test TIC leaked"
 
+    def radec_for(tics):                                         # RA/Dec aligned to the dataset's stars
+        if GROUPING_MODE != "nearest":
+            return None
+        if not {"ra", "dec"} <= set(df.columns):
+            raise RuntimeError("GROUPING_MODE=nearest but the parquet has no ra/dec columns "
+                               "-- cannot group spatially (fix the data, do not fall back to random)")
+        sub = df.set_index(df["TIC"].astype(str))
+        return sub.loc[[str(t) for t in tics], ["ra", "dec"]].to_numpy(dtype=float)
+
     train_ds = AreaGroupAEDataset(base_tr.X, base_tr.M, base_tr.areas, base_tr.tics,
                                   n_stars=N_STARS, group_size=GROUP_SIZE, seed=SEED,
-                                  require_full=REQUIRE_FULL, resample=True)
+                                  require_full=REQUIRE_FULL, resample=True,
+                                  grouping_mode=GROUPING_MODE, radec=radec_for(base_tr.tics))
     val_ds = AreaGroupAEDataset(base_va.X, base_va.M, base_va.areas, base_va.tics,
                                 n_stars=N_STARS, group_size=GROUP_SIZE, seed=SEED,
-                                require_full=False, resample=False)         # fixed deterministic val groups
+                                require_full=False, resample=False,
+                                grouping_mode=GROUPING_MODE, radec=radec_for(base_va.tics))
     print(f"train: {len(train_ds.eligible)} areas -> {len(train_ds)} groups/epoch | "
           f"val: {len(val_ds.eligible)} areas -> {len(val_ds)} groups", flush=True)
 
@@ -149,7 +166,7 @@ def main():
         json.dump(preprocessing_config(), fh, indent=2)
     fields = ["epoch", "train_total", "train_shared", "train_size", "val_total", "val_shared",
               "val_size", "corr_before", "corr_after", "pct_reduction", "corr_rms_over_input_rms",
-              "latent_std", "effective_rank"]
+              "frac_over_cap", "latent_std", "effective_rank"]
     metrics_path = os.path.join(ART_DIR, f"metrics_{tag}.csv")
     with open(metrics_path, "w", newline="") as fh:
         csv.DictWriter(fh, fieldnames=fields).writeheader()
@@ -174,6 +191,7 @@ def main():
                  "val_total": vm["total_loss"], "val_shared": vm["shared_loss"], "val_size": vm["size_loss"],
                  "corr_before": vm["corr_before"], "corr_after": vm["corr_after"],
                  "pct_reduction": vm["pct_reduction"], "corr_rms_over_input_rms": vm["corr_rms_over_input_rms"],
+                 "frac_over_cap": vm["frac_over_cap"],
                  "latent_std": vm["latent_std"], "effective_rank": vm["effective_rank"]})
         marker = ""
         if vm["total_loss"] < best["val_total"]:
@@ -189,7 +207,8 @@ def main():
         print(f"[epoch {epoch:02d}] total={vm['total_loss']:.4f} shared={vm['shared_loss']:.4f} "
               f"size={vm['size_loss']:.4f} corr {vm['corr_before']:.3f}->{vm['corr_after']:.3f} "
               f"(-{vm['pct_reduction']:.0f}%) c/x_rms={vm['corr_rms_over_input_rms']:.3f} "
-              f"lstd={vm['latent_std']:.3f} erank={vm['effective_rank']:.1f}{marker}", flush=True)
+              f"over_cap={vm['frac_over_cap']:.3f} lstd={vm['latent_std']:.3f} "
+              f"erank={vm['effective_rank']:.1f}{marker}", flush=True)
 
         if vm["latent_std"] < COLLAPSE_STD:
             print(f"!! LATENT COLLAPSE: std {vm['latent_std']:.2e} < {COLLAPSE_STD:.1e} -- stopping", flush=True)
@@ -197,7 +216,7 @@ def main():
             break
 
     selection = {"tag": tag, "seed": SEED, "group_size": GROUP_SIZE, "latent_dim": LATENT_DIM,
-                 "loss_mode": LOSS_MODE, "topk_peers": TOPK_PEERS,
+                 "loss_mode": LOSS_MODE, "topk_peers": TOPK_PEERS, "grouping_mode": GROUPING_MODE,
                  "n_stars": N_STARS, "epochs": EPOCHS, "lambda_size": LAMBDA_SIZE, "min_overlap": MIN_OVERLAP,
                  "require_full": REQUIRE_FULL, "collapsed": collapsed, "best": best,
                  "checkpoint": f"{ckpt_base}_best.pth", "encoder_checkpoint": f"{ckpt_base}_best_encoder.pth",

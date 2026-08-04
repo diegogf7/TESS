@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import torch
 
 def _pairwise_corr(curves, masks, min_overlap):
@@ -155,15 +157,21 @@ def _window_pair_cov(a, masks, s, e, ii, jj, overlap, norm_var=None):
 
 
 def windowed_group_cov_loss(residuals, curves, masks, scales=(64, 128), overlap=0.5,
-                            top_frac=0.25, min_pairs=8, eps=1e-6):
-    """Multi-scale, consensus-selected group-covariance loss over ALL 32 curves.
-    Per scale: split into 50%-overlap windows; rank windows by average SIGNED
-    pairwise covariance of the ORIGINALS (independent stellar behaviour averages
-    out); keep the top 25% (detached). On those windows minimize the SQUARED
-    normalized group covariance of the CLEANED residuals; denominators are the
-    detached original-curve window variances."""
+                            top_frac=0.25, group_frac=0.75, eps=1e-6):
+    """Multi-scale, consensus-selected group-covariance loss over ALL curves in a
+    group. Per scale: split into 50%-overlap windows; a window is usable only if at
+    least ceil(group_frac*N) curves are >=50% observed within it AND at least
+    C(ceil(group_frac*N),2) of the pairs formed from THOSE curves overlap -- so the
+    validity requirement scales with group size instead of a fixed min_pairs. Rank
+    usable windows by average SIGNED pairwise covariance of the ORIGINALS (over the
+    sufficiently-valid pairs, so independent stellar behaviour averages out), keep
+    the top 25% (detached), and on those minimize the SQUARED normalized group
+    covariance of the CLEANED residuals (denominators = detached original window
+    variances)."""
     N, L = residuals.shape
     ii, jj = torch.triu_indices(N, N, offset=1, device=residuals.device)
+    min_curves = math.ceil(group_frac * N)
+    min_pairs = math.comb(min_curves, 2)
     losses = []
     for W in scales:
         stride = max(1, int(W * overlap))
@@ -171,11 +179,16 @@ def windowed_group_cov_loss(residuals, curves, masks, scales=(64, 128), overlap=
         cons, keep = [], []
         with torch.no_grad():                                # selection detached
             for s in starts:
-                cov0, valid0 = _window_pair_cov(curves, masks, s, s + W, ii, jj, overlap)
-                if int(valid0.sum()) < min_pairs:            # skip windows with too few valid pairs
-                    cons.append(float("-inf")); keep.append(None)
-                else:
-                    cons.append(float(cov0[valid0].mean())); keep.append((s, s + W, valid0))
+                mw = (masks[:, s:s + W] > 0).to(curves.dtype)
+                curve_ok = mw.mean(1) >= 0.5                  # each curve >=50% of window observed
+                if int(curve_ok.sum()) < min_curves:         # need enough sufficiently-valid curves
+                    cons.append(float("-inf")); keep.append(None); continue
+                pair_ok = curve_ok[ii] & curve_ok[jj]        # pairs only from those curves
+                cov0, ov = _window_pair_cov(curves, masks, s, s + W, ii, jj, overlap)
+                valid0 = ov & pair_ok
+                if int(valid0.sum()) < min_pairs:            # scaled pair floor
+                    cons.append(float("-inf")); keep.append(None); continue
+                cons.append(float(cov0[valid0].mean())); keep.append((s, s + W, valid0))
         vw = [w for w in range(len(starts)) if keep[w] is not None]
         if not vw:
             continue

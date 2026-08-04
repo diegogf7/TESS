@@ -1,13 +1,5 @@
 from __future__ import annotations
-"""Per-epoch group sampler + leave-one-out systematics targets.
 
-Per area, a FIXED deterministic pool of exactly n_stars training stars. Each
-epoch the pool is reshuffled (seed, epoch, area); the first floor(pool/32)*32
-stars are partitioned into disjoint 32-star groups (31 groups for 1000 stars,
-leaving 8 that rotate next epoch). For every curve i in a group the target is the
-leave-one-out median of the OTHER 31 curves, valid where >=4 others are observed
-(reuses the existing group_statistics). No group combos are precomputed.
-"""
 
 import numpy as np
 import torch
@@ -18,7 +10,8 @@ from src.instrument_v2.area_commonmode_dataset import group_statistics
 
 class AreaGroupLOODataset(Dataset):
     def __init__(self, X, M, areas, tics, n_stars=1000, group_size=32,
-                 target_min_valid=4, seed=0, require_full=True, resample=True):
+                 target_min_valid=4, seed=0, require_full=True, resample=True,
+                 grouping_mode="random", radec=None):
         self.X, self.M = X, M
         self.areas = np.asarray(areas, dtype=np.int64)
         self.tics = np.asarray(tics, dtype=str)
@@ -27,6 +20,14 @@ class AreaGroupLOODataset(Dataset):
         self.target_min_valid = int(target_min_valid)
         self.base_seed = int(seed)
         self.resample = bool(resample)
+        self.grouping_mode = str(grouping_mode)
+        if self.grouping_mode not in ("random", "nearest"):
+            raise ValueError(f"grouping_mode must be random|nearest, got {grouping_mode!r}")
+        # RA/Dec aligned to X rows; REQUIRED for nearest, never fall back to random silently
+        self.radec = None if radec is None else np.asarray(radec, dtype=np.float64)
+        if self.grouping_mode == "nearest" and self.radec is None:
+            raise RuntimeError("GROUPING_MODE=nearest requires RA/Dec; none provided "
+                               "-- refusing to silently use random grouping")
 
         rows_by_area = {}
         for i, a in enumerate(self.areas):
@@ -48,9 +49,37 @@ class AreaGroupLOODataset(Dataset):
         self.eligible = sorted(self.pool)
         if not self.eligible:
             raise RuntimeError("no area has enough stars for a group")
+        self._nearest = self._build_nearest_groups() if self.grouping_mode == "nearest" else None
         self._build(0)
 
+    def _build_nearest_groups(self):
+        """Per area: one anchor-centered group per pool star = the group_size nearest
+        stars (incl. the anchor) by RA/Dec angular distance, restricted to the same
+        area (=> same sector/camera/ccd). Deterministic; groups overlap (not disjoint)."""
+        gs = self.group_size
+        groups = {}
+        for a in self.eligible:
+            pool = self.pool[a]
+            if len(pool) < gs:
+                continue
+            rd = self.radec[pool]
+            ra = np.radians(rd[:, 0]); dec = np.radians(rd[:, 1])
+            cosd = np.cos(np.clip(dec, -np.pi / 2, np.pi / 2))
+            dra = (ra[:, None] - ra[None, :]) * ((cosd[:, None] + cosd[None, :]) / 2)   # small-field
+            d2 = dra ** 2 + (dec[:, None] - dec[None, :]) ** 2                          # ang. dist^2
+            order = np.argsort(d2, axis=1, kind="stable")[:, :gs]                        # nearest gs incl self
+            n_anchor = min(len(pool), self.n_stars)          # cap: up to ~n_stars anchor groups/area
+            if n_anchor < len(pool):
+                anchors = np.random.default_rng([self.base_seed, a]).choice(len(pool), size=n_anchor, replace=False)
+            else:
+                anchors = np.arange(len(pool))
+            groups[a] = [pool[order[i]].astype(np.int64) for i in anchors]
+        return groups
+
     def _build(self, epoch):
+        if self.grouping_mode == "nearest":                  # anchor-centered, epoch-independent
+            self.items = [(grp, int(a)) for a in self.eligible for grp in self._nearest.get(a, [])]
+            return
         e = epoch if self.resample else 0
         items = []
         for a in self.eligible:
@@ -67,12 +96,15 @@ class AreaGroupLOODataset(Dataset):
             self._build(int(epoch))
 
     def assert_contracts(self):
-        per_area = {}
         for rows, a in self.items:
-            per_area[a] = per_area.get(a, 0) + 1
-            assert len(rows) == self.group_size == len(np.unique(rows)), "group not 32 unique"
-        for a in self.eligible:                          # each area: floor(pool/32) disjoint groups
-            assert per_area.get(a, 0) == len(self.pool[a]) // self.group_size, (a, per_area.get(a, 0))
+            assert len(rows) == self.group_size == len(np.unique(rows)), "group wrong size / has dupes"
+            assert set(self.areas[rows].tolist()) == {a}, "group spans areas"
+        if self.grouping_mode == "random":               # disjoint partition only for random
+            per_area = {}
+            for rows, a in self.items:
+                per_area[a] = per_area.get(a, 0) + 1
+            for a in self.eligible:
+                assert per_area.get(a, 0) == len(self.pool[a]) // self.group_size, (a, per_area.get(a, 0))
         return True
 
     def loo_targets(self, rows):
