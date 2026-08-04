@@ -26,6 +26,11 @@ export REQUIRE_FULL=${REQUIRE_FULL:-0}
 export USE_AMP=${USE_AMP:-0}
 export SEED=${SEED:-0}
 export EPOCHS=${EPOCHS:-30}
+export LR=${LR:-3e-4}
+export WEIGHT_DECAY=${WEIGHT_DECAY:-0.0}
+export GROUPS_PER_AREA=${GROUPS_PER_AREA:-100}
+export EARLY_STOP_PATIENCE=${EARLY_STOP_PATIENCE:-3}
+export COLLAPSE_STD=${COLLAPSE_STD:-0.05}
 export MIN_OVERLAP=${MIN_OVERLAP:-64}
 export MAX_BATCHES=${MAX_BATCHES:-0}
 export S14_DATA=${S14_DATA:-/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_cadence_s14_dense_v2_xy.parquet}
@@ -40,6 +45,7 @@ echo "  git commit  : $(git rev-parse HEAD 2>/dev/null || echo unknown)"
 echo "  LOSS_MODE   : $LOSS_MODE   GROUPING : $GROUPING_MODE   GROUP_SIZE : $GROUP_SIZE"
 echo "  TOKENS      : ${N_TOKENS}x${TOKEN_DIM}   LAMBDA_SIZE : $LAMBDA_SIZE   N_STARS : $N_STARS"
 echo "  EPOCHS      : $EPOCHS   REQUIRE_FULL : $REQUIRE_FULL   USE_AMP : $USE_AMP   MAX_BATCHES : $MAX_BATCHES"
+echo "  LR/WD/GPA   : $LR / $WEIGHT_DECAY / $GROUPS_PER_AREA   EARLY_STOP : $EARLY_STOP_PATIENCE   COLLAPSE_STD : $COLLAPSE_STD"
 echo "  S14_DATA    : $S14_DATA"
 echo "  ART/CKPT    : $ART_DIR | $CKPT_DIR"
 echo "========================================================"

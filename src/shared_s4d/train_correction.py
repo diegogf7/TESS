@@ -33,6 +33,9 @@ GROUPING_MODE = os.environ.get("GROUPING_MODE", "random")       # random | neare
 N_STARS = int(os.environ.get("N_STARS", "1000"))
 EPOCHS = int(os.environ.get("EPOCHS", "30"))
 LR = float(os.environ.get("LR", "1e-3"))
+WEIGHT_DECAY = float(os.environ.get("WEIGHT_DECAY", "0.0"))
+GROUPS_PER_AREA = int(os.environ.get("GROUPS_PER_AREA", "100"))
+EARLY_STOP_PATIENCE = int(os.environ.get("EARLY_STOP_PATIENCE", "3"))
 LAMBDA_SIZE = float(os.environ.get("LAMBDA_SIZE", "0.01"))
 LOSS_MODE = os.environ.get("LOSS_MODE", "topk_fixed_cov")     # topk_fixed_cov | legacy_corr
 TOPK_PEERS = int(os.environ.get("TOPK_PEERS", "8"))
@@ -135,7 +138,8 @@ def val_metrics(model, loader):
 def main():
     random.seed(SEED); np.random.seed(SEED); torch.manual_seed(SEED)
     os.makedirs(ART_DIR, exist_ok=True); os.makedirs(CKPT_DIR, exist_ok=True)
-    tag = experiment_tag(LOSS_MODE, GROUPING_MODE, GROUP_SIZE, N_TOKENS, TOKEN_DIM, LAMBDA_SIZE, SEED)
+    tag = experiment_tag(LOSS_MODE, GROUPING_MODE, GROUP_SIZE, N_TOKENS, TOKEN_DIM, LAMBDA_SIZE, SEED,
+                         lr=LR, weight_decay=WEIGHT_DECAY, groups_per_area=GROUPS_PER_AREA)
     ckpt_base = os.path.join(CKPT_DIR, tag)
     print(f"git {git_commit()}  tag {tag}  device {DEVICE}  loss {LOSS_MODE} grouping {GROUPING_MODE} "
           f"g{GROUP_SIZE} tokens {N_TOKENS}x{TOKEN_DIM}=z{LATENT_DIM} topk {TOPK_PEERS}  "
@@ -184,11 +188,13 @@ def main():
     train_ds = AreaGroupAEDataset(base_tr.X, base_tr.M, base_tr.areas, base_tr.tics,
                                   n_stars=N_STARS, group_size=GROUP_SIZE, seed=SEED,
                                   require_full=REQUIRE_FULL, resample=True, grouping_mode=GROUPING_MODE,
-                                  radec=radec_for(base_tr.tics), detxy=detxy_for(base_tr.tics))
+                                  radec=radec_for(base_tr.tics), detxy=detxy_for(base_tr.tics),
+                                  groups_per_area=GROUPS_PER_AREA)
     val_ds = AreaGroupAEDataset(base_va.X, base_va.M, base_va.areas, base_va.tics,
                                 n_stars=N_STARS, group_size=GROUP_SIZE, seed=SEED,
                                 require_full=False, resample=False, grouping_mode=GROUPING_MODE,
-                                radec=radec_for(base_va.tics), detxy=detxy_for(base_va.tics))
+                                radec=radec_for(base_va.tics), detxy=detxy_for(base_va.tics),
+                                groups_per_area=GROUPS_PER_AREA)
     print(f"train: {len(train_ds.eligible)} areas -> {len(train_ds)} groups/epoch | "
           f"val: {len(val_ds.eligible)} areas -> {len(val_ds)} groups", flush=True)
     if getattr(train_ds, "group_stats", None):                   # per-area: pool, groups, neighbor dist
@@ -203,7 +209,7 @@ def main():
                              f"med_dist {s['med_dist']:.1f} max_dist {s['max_dist']:.1f}", flush=True)
 
     model = build_model().to(DEVICE)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
     scaler = torch.amp.GradScaler("cuda", enabled=USE_AMP)
 
@@ -221,6 +227,7 @@ def main():
     # so it cannot win), and reject epochs whose reduction is negligible.
     MIN_PW_REDUCTION = float(os.environ.get("MIN_PW_REDUCTION", "1.0"))   # percent
     best = {"pw_reduction": -float("inf"), "epoch": None}
+    best_pwr = -float("inf"); no_improve = 0                              # early-stop bookkeeping
     collapsed = False
     for epoch in range(1, EPOCHS + 1):
         train_ds.set_epoch(epoch)
@@ -246,15 +253,20 @@ def main():
                  "latent_std": vm["latent_std"], "effective_rank": vm["effective_rank"]})
         marker = ""
         pwr = vm["pw_reduction"]
-        if np.isfinite(pwr) and pwr >= MIN_PW_REDUCTION and pwr > best["pw_reduction"]:
-            best = {"pw_reduction": pwr, "epoch": epoch, "pw_before": vm["pw_before"],
-                    "pw_after": vm["pw_after"], "corr_before": vm["corr_before"], "corr_after": vm["corr_after"],
-                    "energy_ratio": vm["energy_ratio"], "corr_rms_over_input_rms": vm["corr_rms_over_input_rms"]}
-            torch.save({"model": model.state_dict(), "config": preprocessing_config(), "epoch": epoch,
-                        "lambda_size": LAMBDA_SIZE, "pw_reduction": pwr}, f"{ckpt_base}_best.pth")
-            torch.save(model.encoder.state_dict(), f"{ckpt_base}_best_encoder.pth")
-            torch.save(model.decoder.state_dict(), f"{ckpt_base}_best_decoder.pth")
-            marker = " <- best"
+        improved = np.isfinite(pwr) and pwr > best_pwr                    # any new max = improvement
+        if improved:
+            best_pwr = pwr; no_improve = 0
+            if pwr >= MIN_PW_REDUCTION:                                   # save only meaningful reductions
+                best = {"pw_reduction": pwr, "epoch": epoch, "pw_before": vm["pw_before"],
+                        "pw_after": vm["pw_after"], "corr_before": vm["corr_before"], "corr_after": vm["corr_after"],
+                        "energy_ratio": vm["energy_ratio"], "corr_rms_over_input_rms": vm["corr_rms_over_input_rms"]}
+                torch.save({"model": model.state_dict(), "config": preprocessing_config(), "epoch": epoch,
+                            "lambda_size": LAMBDA_SIZE, "pw_reduction": pwr}, f"{ckpt_base}_best.pth")
+                torch.save(model.encoder.state_dict(), f"{ckpt_base}_best_encoder.pth")
+                torch.save(model.decoder.state_dict(), f"{ckpt_base}_best_decoder.pth")
+                marker = " <- best"
+        else:
+            no_improve += 1
         print(f"[epoch {epoch:02d}] pw {vm['pw_before']:.4f}->{vm['pw_after']:.4f} "
               f"(-{vm['pw_reduction']:.1f}%) | corr {vm['corr_before']:.3f}->{vm['corr_after']:.3f} "
               f"(-{vm['pct_reduction']:.0f}%) energy={vm['energy_ratio']:.3f} "
@@ -264,6 +276,10 @@ def main():
         if vm["latent_std"] < COLLAPSE_STD:
             print(f"!! LATENT COLLAPSE: std {vm['latent_std']:.2e} < {COLLAPSE_STD:.1e} -- stopping", flush=True)
             collapsed = True
+            break
+        if no_improve >= EARLY_STOP_PATIENCE:                    # stop after N epochs w/o improved pw reduction
+            print(f"!! EARLY STOP: {no_improve} epochs without improved pairwise-window reduction "
+                  f"(best {best_pwr:.1f}% @ epoch {best['epoch']}); best checkpoint preserved", flush=True)
             break
 
     meaningful = best["epoch"] is not None                       # did any epoch clear MIN_PW_REDUCTION?

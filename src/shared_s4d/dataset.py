@@ -11,7 +11,7 @@ from src.instrument_v2.area_commonmode_dataset import group_statistics
 class AreaGroupLOODataset(Dataset):
     def __init__(self, X, M, areas, tics, n_stars=1000, group_size=32,
                  target_min_valid=4, seed=0, require_full=True, resample=True,
-                 grouping_mode="random", radec=None, detxy=None):
+                 grouping_mode="random", radec=None, detxy=None, groups_per_area=None):
         self.X, self.M = X, M
         self.areas = np.asarray(areas, dtype=np.int64)
         self.tics = np.asarray(tics, dtype=str)
@@ -28,6 +28,7 @@ class AreaGroupLOODataset(Dataset):
         # detector_nearest -> detxy (STAR_X, STAR_Y detector pixels, Euclidean distance)
         self.radec = None if radec is None else np.asarray(radec, dtype=np.float64)
         self.detxy = None if detxy is None else np.asarray(detxy, dtype=np.float64)
+        self.groups_per_area = None if groups_per_area is None else int(groups_per_area)
         if self.grouping_mode == "nearest" and self.radec is None:
             raise RuntimeError("GROUPING_MODE=nearest requires RA/Dec; none provided "
                                "-- refusing to silently use random grouping")
@@ -116,8 +117,20 @@ class AreaGroupLOODataset(Dataset):
         return groups
 
     def _build(self, epoch):
-        if self.grouping_mode in ("nearest", "detector_nearest"):   # anchor-centered, epoch-independent
-            self.items = [(grp, int(a)) for a in self.eligible for grp in self._nearest.get(a, [])]
+        if self.grouping_mode in ("nearest", "detector_nearest"):
+            # Deterministically sample up to groups_per_area of the EXISTING nearest groups per
+            # area (fresh subset each epoch when resample=True). The nearest groups themselves
+            # (self._nearest) are never rebuilt or changed.
+            e = epoch if self.resample else 0
+            items = []
+            for a in self.eligible:
+                groups = self._nearest.get(a, [])
+                if self.groups_per_area and len(groups) > self.groups_per_area:
+                    idx = np.random.default_rng([self.base_seed, e, a]).choice(
+                        len(groups), size=self.groups_per_area, replace=False)
+                    groups = [groups[i] for i in idx]
+                items.extend((grp, int(a)) for grp in groups)
+            self.items = items
             return
         e = epoch if self.resample else 0
         items = []

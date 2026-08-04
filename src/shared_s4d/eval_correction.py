@@ -27,11 +27,13 @@ from src.shared_s4d.correction_losses import (_select_topk_peers, mean_abs_pairw
                                               pairwise_window_cov_loss)
 from src.shared_s4d.train_correction import (SEED, GROUP_SIZE, N_STARS, LAMBDA_SIZE, MIN_OVERLAP,
                                              TOPK_PEERS, LOSS_MODE, GROUPING_MODE, COLLAPSE_STD, DEVICE,
+                                             LR, WEIGHT_DECAY, GROUPS_PER_AREA,
                                              S14_DATA, SPLIT_DIR, BASE_ART_DIR, ART_DIR, CKPT_DIR)
 from src.instrument_v2.train_sector14_jepa import effective_rank
 
 CKPT = os.environ.get("CKPT", os.path.join(CKPT_DIR, experiment_tag(   # auto-locate via shared tag
-    LOSS_MODE, GROUPING_MODE, GROUP_SIZE, N_TOKENS, TOKEN_DIM, LAMBDA_SIZE, SEED) + "_best.pth"))
+    LOSS_MODE, GROUPING_MODE, GROUP_SIZE, N_TOKENS, TOKEN_DIM, LAMBDA_SIZE, SEED,
+    lr=LR, weight_decay=WEIGHT_DECAY, groups_per_area=GROUPS_PER_AREA) + "_best.pth"))
 OUT_DIR = os.environ.get("OUT_DIR", os.path.join(ART_DIR, "eval"))
 FLAT_THRESH = 0.05
 
