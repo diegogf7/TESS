@@ -200,7 +200,8 @@ def main():
     val_ds = AreaGroupAEDataset(base_va.X, base_va.M, base_va.areas, base_va.tics,
                                 n_stars=N_STARS, group_size=GROUP_SIZE, seed=SEED,
                                 require_full=False, resample=False,
-                                grouping_mode=GROUPING_MODE, radec=radec, detxy=detxy)
+                                grouping_mode=GROUPING_MODE, radec=radec, detxy=detxy,
+                                groups_per_area=GROUPS_PER_AREA)   # cap val groups (else ~55k = slow)
     model = load_model(CKPT)
     metrics, flags, strongest = evaluate(model, val_ds)
 
