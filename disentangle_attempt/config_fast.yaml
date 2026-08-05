@@ -1,0 +1,39 @@
+# Fast MVP run. Fixed dimensions are contractual and must not be tuned away:
+# 32 anchors per step, 8 peers, 32 tokens x 16 dims per curve.
+seed: 42
+curve_length: 1024
+anchors_per_step: 32
+n_peers: 8
+n_tokens: 32
+token_dim: 16
+hidden_fraction: 0.25
+mask_style: contiguous_windows
+
+# Target detector: 'auto' takes the sector/camera/CCD with the most cross-sector
+# anchors. Set all three together to pin it.
+sector: auto
+camera: auto
+ccd: auto
+max_eligible_anchors: 1000
+min_valid_fraction: 0.5
+
+# Encoder size is the only speed knob; 128 x 4 layers keeps a 100-step epoch near
+# 3 min on an Apple GPU and well inside the wall-clock cap.
+d_model: 128
+n_layers: 4
+dropout: 0.0
+
+max_train_steps_per_epoch: 100
+max_val_steps_per_epoch: 20
+max_epochs: 8
+early_stopping_patience: 2
+max_runtime_minutes: 60
+
+optimizer: adamw
+learning_rate: 0.0003
+weight_decay: 0.0001
+physics_consistency_weight: 0.05
+gradient_clip: 1.0
+mixed_precision: true      # honoured on CUDA; S4D needs complex FFT, so off elsewhere
+num_workers: 4
+device: auto

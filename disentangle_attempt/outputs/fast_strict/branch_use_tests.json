@@ -1,0 +1,49 @@
+{
+  "baseline": {
+    "reconstruction": 0.08356544256210327,
+    "sector_consistency": 0.012020028233528136,
+    "total": 0.08416644334793091,
+    "n_loss_cadences": 8442.8,
+    "visible_reconstruction": 0.09390045940876007
+  },
+  "conditions": {
+    "shuffle_physics": {
+      "metrics": {
+        "reconstruction": 0.4015554094314575,
+        "sector_consistency": 0.012110048532485962,
+        "total": 0.40216090679168703,
+        "n_loss_cadences": 8442.8,
+        "visible_reconstruction": 0.43543890476226804
+      },
+      "delta_reconstruction": 0.3179899668693542,
+      "delta_sector_consistency": 9.002029895782519e-05
+    },
+    "random_peers": {
+      "metrics": {
+        "reconstruction": 0.16573206067085267,
+        "sector_consistency": 0.012020028233528136,
+        "total": 0.1663330614566803,
+        "n_loss_cadences": 8442.8,
+        "visible_reconstruction": 0.16306447267532348
+      },
+      "delta_reconstruction": 0.0821666181087494,
+      "delta_sector_consistency": 0.0
+    },
+    "wrong_other_sector": {
+      "metrics": {
+        "reconstruction": 0.08356544256210327,
+        "sector_consistency": 0.011333938241004943,
+        "total": 0.08413214057683945,
+        "n_loss_cadences": 8442.8,
+        "visible_reconstruction": 0.09390045940876007
+      },
+      "delta_reconstruction": 0.0,
+      "delta_sector_consistency": -0.0006860899925231929
+    }
+  },
+  "verdicts": {
+    "physics_branch_used": true,
+    "instrument_branch_used": true,
+    "cross_sector_branch_used": false
+  }
+}

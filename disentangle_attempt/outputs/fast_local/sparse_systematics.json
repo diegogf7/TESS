@@ -1,0 +1,21 @@
+{
+  "n_anchors": 32,
+  "n_injected": 4,
+  "systematic_amplitude_mad": 4.0,
+  "transit_depth_mad": 1.5,
+  "actual_context_follows_systematic": 0.3851170241832733,
+  "quiet_context_follows_systematic": 0.028615089133381844,
+  "suppression_factor": 13.458529602621534,
+  "uninjected_anchor_response": 0.0,
+  "transit_recovered_in_cleaned": 0.06803430120150249,
+  "transit_recovered_in_actual": 0.0685582160949707,
+  "notes": {
+    "follow_metrics": "stitched complementary-mask prediction; every cadence predicted while hidden",
+    "transit_metrics": "single pass leaving the transit window visible to the physics encoder -- a hidden transit is unrecoverable by construction, so cleaning could not be blamed for it"
+  },
+  "passes": {
+    "actual_context_follows_injection": true,
+    "quiet_context_suppresses_injection": true,
+    "transit_survives_cleaning": false
+  }
+}

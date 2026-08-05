@@ -1,0 +1,154 @@
+{
+  "run_name": "cross_sector_direct_v1",
+  "device": "mps",
+  "mixed_precision": false,
+  "parameters": {
+    "physics_s4d": 202000,
+    "instrument_s4d": 202000,
+    "decoder": 5771264,
+    "total": 6175264
+  },
+  "target_sector_camera_ccd": {
+    "sector": 1,
+    "camera": 4,
+    "ccd": 2
+  },
+  "eligible_cross_sector_tics": 1986,
+  "anchors": {
+    "train": 800,
+    "val": 100,
+    "test": 100
+  },
+  "peer_pool": {
+    "train": 1589,
+    "val": 199,
+    "test": 198
+  },
+  "training_seconds": 320.9,
+  "training_minutes": 5.35,
+  "stop_reason": "early_stopping",
+  "best_epoch": 0,
+  "best_val_reconstruction": 0.5711189341545105,
+  "test": {
+    "reconstruction": 0.5764936232566833,
+    "total": 0.5764936232566833,
+    "n_loss_cadences": 29644.8
+  },
+  "branch_use_tests": {
+    "baseline": {
+      "reconstruction": 0.5711189341545105,
+      "total": 0.5711189341545105,
+      "n_loss_cadences": 29644.8
+    },
+    "conditions": {
+      "shuffle_physics": {
+        "metrics": {
+          "reconstruction": 0.5714315366744995,
+          "total": 0.5714315366744995,
+          "n_loss_cadences": 29644.8
+        },
+        "delta_reconstruction": 0.00031260251998899147
+      },
+      "random_peers": {
+        "metrics": {
+          "reconstruction": 1.0634003019332885,
+          "total": 1.0634003019332885,
+          "n_loss_cadences": 29644.8
+        },
+        "delta_reconstruction": 0.49228136777877796
+      }
+    },
+    "verdicts": {
+      "cross_sector_physics_branch_used": true,
+      "instrument_branch_used": true
+    }
+  },
+  "reference_context": {
+    "sector": 1,
+    "camera": 4,
+    "ccd": 2,
+    "split": "train",
+    "seed_row": 660,
+    "seed_tic": "392011090",
+    "seed_detector_x": 1779.2068301351462,
+    "seed_detector_y": 2.5833395180971803,
+    "peer_tics": [
+      "392011088",
+      "392011092",
+      "392011086",
+      "261060765",
+      "392011078",
+      "261060770",
+      "261060759",
+      "392011072"
+    ],
+    "peer_detector_x": [
+      1780.6726922501327,
+      1782.1162292642432,
+      1779.8501933852158,
+      1780.3647245027635,
+      1776.401451889738,
+      1783.779179871937,
+      1777.4349006011203,
+      1772.642654907218
+    ],
+    "peer_detector_y": [
+      4.956749535847114,
+      3.1723085558034394,
+      5.5973763561332674,
+      6.337269121969252,
+      6.486600252562581,
+      5.726992931308629,
+      8.542371514853125,
+      3.5340491888073244
+    ],
+    "peer_distances_from_seed": [
+      2.7895925045013428,
+      2.9684150218963623,
+      3.081936836242676,
+      3.928448438644409,
+      4.806827545166016,
+      5.548778057098389,
+      6.216896057128906,
+      6.632665157318115
+    ],
+    "selection_score": 6.403920984649658,
+    "score_basis": "background",
+    "flagged_valid_fraction": 0.0,
+    "max_systematic_fraction": 0.0,
+    "cadence_id_first": 4697,
+    "cadence_id_last": 5720,
+    "note": "Observed low-systematics context used as a counterfactual baseline condition. Not a correction target and not ground truth."
+  },
+  "config": {
+    "seed": 42,
+    "curve_length": 1024,
+    "anchors_per_step": 32,
+    "n_peers": 8,
+    "n_tokens": 32,
+    "token_dim": 16,
+    "hidden_fraction": 0.25,
+    "mask_style": "contiguous_windows",
+    "sector": "auto",
+    "camera": "auto",
+    "ccd": "auto",
+    "max_eligible_anchors": 1000,
+    "min_valid_fraction": 0.5,
+    "d_model": 128,
+    "n_layers": 4,
+    "dropout": 0.0,
+    "max_train_steps_per_epoch": 100,
+    "max_val_steps_per_epoch": 20,
+    "max_epochs": 8,
+    "early_stopping_patience": 2,
+    "max_runtime_minutes": 60,
+    "optimizer": "adamw",
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "physics_consistency_weight": 0.05,
+    "gradient_clip": 1.0,
+    "mixed_precision": true,
+    "num_workers": 4,
+    "device": "auto"
+  }
+}

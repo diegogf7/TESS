@@ -1,0 +1,177 @@
+{
+  "run_name": "fast_local",
+  "device": "mps",
+  "mixed_precision": false,
+  "parameters": {
+    "physics_s4d": 202000,
+    "instrument_s4d": 202000,
+    "decoder": 5771264,
+    "total": 6175264
+  },
+  "target_sector_camera_ccd": {
+    "sector": 1,
+    "camera": 4,
+    "ccd": 2
+  },
+  "eligible_cross_sector_tics": 1986,
+  "anchors": {
+    "train": 800,
+    "val": 100,
+    "test": 100
+  },
+  "peer_pool": {
+    "train": 1589,
+    "val": 199,
+    "test": 198
+  },
+  "training_seconds": 1034.8,
+  "training_minutes": 17.25,
+  "stop_reason": "max_epochs",
+  "best_epoch": 7,
+  "best_val_reconstruction": 0.11872630566358566,
+  "best_val_sector_consistency": 0.019630032777786254,
+  "test": {
+    "reconstruction": 0.1510916045308113,
+    "sector_consistency": 0.018349037170410157,
+    "total": 0.1520090565085411,
+    "n_loss_cadences": 8532.8,
+    "visible_reconstruction": 0.13397199153900147
+  },
+  "branch_use_tests": {
+    "baseline": {
+      "reconstruction": 0.11872630566358566,
+      "sector_consistency": 0.019630032777786254,
+      "total": 0.11970780998468399,
+      "n_loss_cadences": 8532.8,
+      "visible_reconstruction": 0.11736043125391006
+    },
+    "conditions": {
+      "shuffle_physics": {
+        "metrics": {
+          "reconstruction": 0.485372439622879,
+          "sector_consistency": 0.029427775144577027,
+          "total": 0.4868438172340393,
+          "n_loss_cadences": 8532.8,
+          "visible_reconstruction": 0.4624765419960022
+        },
+        "delta_reconstruction": 0.36664613395929335,
+        "delta_sector_consistency": 0.009797742366790773
+      },
+      "random_peers": {
+        "metrics": {
+          "reconstruction": 0.2038998034596443,
+          "sector_consistency": 0.019630032777786254,
+          "total": 0.20488130539655686,
+          "n_loss_cadences": 8532.8,
+          "visible_reconstruction": 0.19321221709251404
+        },
+        "delta_reconstruction": 0.08517349779605865,
+        "delta_sector_consistency": 0.0
+      },
+      "wrong_other_sector": {
+        "metrics": {
+          "reconstruction": 0.11872630566358566,
+          "sector_consistency": 0.028578665256500244,
+          "total": 0.12015524119138718,
+          "n_loss_cadences": 8532.8,
+          "visible_reconstruction": 0.11736043125391006
+        },
+        "delta_reconstruction": 0.0,
+        "delta_sector_consistency": 0.00894863247871399
+      }
+    },
+    "verdicts": {
+      "physics_branch_used": true,
+      "instrument_branch_used": true,
+      "cross_sector_branch_used": true
+    }
+  },
+  "reference_context": {
+    "sector": 1,
+    "camera": 4,
+    "ccd": 2,
+    "split": "train",
+    "seed_row": 660,
+    "seed_tic": "392011090",
+    "seed_detector_x": 1779.2068301351462,
+    "seed_detector_y": 2.5833395180971803,
+    "peer_tics": [
+      "392011088",
+      "392011092",
+      "392011086",
+      "261060765",
+      "392011078",
+      "261060770",
+      "261060759",
+      "392011072"
+    ],
+    "peer_detector_x": [
+      1780.6726922501327,
+      1782.1162292642432,
+      1779.8501933852158,
+      1780.3647245027635,
+      1776.401451889738,
+      1783.779179871937,
+      1777.4349006011203,
+      1772.642654907218
+    ],
+    "peer_detector_y": [
+      4.956749535847114,
+      3.1723085558034394,
+      5.5973763561332674,
+      6.337269121969252,
+      6.486600252562581,
+      5.726992931308629,
+      8.542371514853125,
+      3.5340491888073244
+    ],
+    "peer_distances_from_seed": [
+      2.7895925045013428,
+      2.9684150218963623,
+      3.081936836242676,
+      3.928448438644409,
+      4.806827545166016,
+      5.548778057098389,
+      6.216896057128906,
+      6.632665157318115
+    ],
+    "selection_score": 6.403920984649658,
+    "score_basis": "background",
+    "severe_flag_fraction": 0.009287925696594427,
+    "max_severe_fraction": 0.05,
+    "cadence_id_first": 4697,
+    "cadence_id_last": 5720,
+    "note": "Observed low-systematics context used as a counterfactual baseline condition. Not a correction target and not ground truth."
+  },
+  "config": {
+    "seed": 42,
+    "curve_length": 1024,
+    "anchors_per_step": 32,
+    "n_peers": 8,
+    "n_tokens": 32,
+    "token_dim": 16,
+    "hidden_fraction": 0.25,
+    "mask_style": "contiguous_windows",
+    "sector": "auto",
+    "camera": "auto",
+    "ccd": "auto",
+    "max_eligible_anchors": 1000,
+    "min_valid_fraction": 0.5,
+    "d_model": 128,
+    "n_layers": 4,
+    "dropout": 0.0,
+    "max_train_steps_per_epoch": 100,
+    "max_val_steps_per_epoch": 20,
+    "max_epochs": 8,
+    "early_stopping_patience": 2,
+    "max_runtime_minutes": 60,
+    "optimizer": "adamw",
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "physics_consistency_weight": 0.05,
+    "gradient_clip": 1.0,
+    "mixed_precision": true,
+    "num_workers": 4,
+    "device": "auto"
+  }
+}

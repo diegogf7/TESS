@@ -1,0 +1,9 @@
+# Downloaded TGLC FITS + the derived patch parquet (~290 MB) -- rebuild with
+# `python -m disentangle_attempt.fetch_data`, never commit.
+data/
+
+# Run artifacts: checkpoints and arrays are large and reproducible from a run.
+# metrics.json / history.csv / branch_use_tests.json / reference_context.json and
+# the PNGs stay tracked so results are reviewable without the binaries.
+outputs/*/*.pt
+outputs/*/*.npz

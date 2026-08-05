@@ -1,0 +1,35 @@
+# Full run for ORCD (one A100/V100). Same contract as config_fast.yaml -- only the
+# scale knobs move: no anchor cap, a wider encoder, more steps, a real epoch budget.
+seed: 42
+curve_length: 1024
+anchors_per_step: 32
+n_peers: 8
+n_tokens: 32
+token_dim: 16
+hidden_fraction: 0.25
+mask_style: contiguous_windows
+
+sector: auto
+camera: auto
+ccd: auto
+max_eligible_anchors: null       # use every eligible cross-sector anchor
+min_valid_fraction: 0.5
+
+d_model: 256
+n_layers: 4
+dropout: 0.1
+
+max_train_steps_per_epoch: 300
+max_val_steps_per_epoch: 40
+max_epochs: 60
+early_stopping_patience: 6
+max_runtime_minutes: 300
+
+optimizer: adamw
+learning_rate: 0.0003
+weight_decay: 0.0001
+physics_consistency_weight: 0.05
+gradient_clip: 1.0
+mixed_precision: true            # actually enabled here: CUDA supports complex half
+num_workers: 8
+device: auto
