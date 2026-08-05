@@ -1,0 +1,209 @@
+{
+  "checkpoint": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/fast_strict/best.pt",
+  "n_stars_evaluated": 100,
+  "sector_camera_ccd": [
+    1,
+    4,
+    2
+  ],
+  "background_field": "TGLC background column",
+  "scope_note": "All nonzero TESS/TGLC flags were removed in preprocessing, so this measures RESIDUAL UNFLAGGED scattered light, not the flagged stray-light cadences.",
+  "test1_peer_common_mode": {
+    "pearson_correction_peercommon": {
+      "median": 0.5635049780830088,
+      "q1": 0.4127301286358624,
+      "q3": 0.7356068381044303,
+      "n": 100
+    },
+    "spearman_correction_peercommon": {
+      "median": 0.5029178430640657,
+      "q1": 0.350332245233556,
+      "q3": 0.6193735697412865,
+      "n": 100
+    },
+    "xcorr_peak_lag": {
+      "median": -1.0,
+      "q1": -18.5,
+      "q3": 8.25,
+      "n": 100
+    },
+    "xcorr_peak_value": {
+      "median": 0.6624070756498692,
+      "q1": 0.5141425781387716,
+      "q3": 0.7785869944162747,
+      "n": 100
+    },
+    "beta_raw": {
+      "median": 1.0017916553946025,
+      "q1": 0.6555309599950533,
+      "q3": 1.2000258346703627,
+      "n": 100
+    },
+    "beta_clean": {
+      "median": 0.5665152671801434,
+      "q1": 0.05903344526898002,
+      "q3": 0.8403559299863388,
+      "n": 100
+    },
+    "removal_fraction": {
+      "median": 0.3031506528123422,
+      "q1": 0.14636874261576918,
+      "q3": 0.59128401505054,
+      "n": 100
+    },
+    "fraction_lag_within_2_cadences": 0.28
+  },
+  "test2_local_background": {
+    "pearson_correction_background": {
+      "median": 0.1153806671500206,
+      "q1": -0.03802858851850033,
+      "q3": 0.2966031953692436,
+      "n": 100
+    },
+    "spearman_correction_background": {
+      "median": -0.06844224356604489,
+      "q1": -0.24814754114909093,
+      "q3": 0.08174521104814828,
+      "n": 100
+    },
+    "xcorr_zero_lag_background": {
+      "median": -0.32407169975414873,
+      "q1": -0.47971419536360627,
+      "q3": 0.4461142642437887,
+      "n": 100
+    },
+    "background_lag": {
+      "median": -46.5,
+      "q1": -50.0,
+      "q3": 12.0,
+      "n": 100
+    }
+  },
+  "test3_high_systematics": {
+    "event_response_ratio": {
+      "median": 3.489861249923706,
+      "q1": 1.8628050684928894,
+      "q3": 6.833621501922607,
+      "n": 100
+    },
+    "raw_vs_peercommon_high": {
+      "median": 0.9328116941471981,
+      "q1": 0.5153811947400483,
+      "q3": 0.9771601238001836,
+      "n": 100
+    },
+    "cleaned_vs_peercommon_high": {
+      "median": 0.537822460180817,
+      "q1": -0.2197216424141811,
+      "q3": 0.8619152218650484,
+      "n": 100
+    }
+  },
+  "test4_peer_controls": {
+    "nearest": {
+      "reconstruction_l1": 0.33628375828266144,
+      "pearson_correction_peercommon": 0.714448099192736,
+      "median_abs_lag": 7.5,
+      "fraction_lag_within_2": 0.36,
+      "removal_fraction": 0.42409653168194167,
+      "n": 50
+    },
+    "random": {
+      "reconstruction_l1": 0.49691978096961975,
+      "pearson_correction_peercommon": 0.41812546077732027,
+      "median_abs_lag": 18.5,
+      "fraction_lag_within_2": 0.12,
+      "removal_fraction": 0.19295007776375078,
+      "n": 50
+    },
+    "time_shuffled": {
+      "reconstruction_l1": 0.46593905985355377,
+      "pearson_correction_peercommon": 0.3910820451466742,
+      "median_abs_lag": 17.0,
+      "fraction_lag_within_2": 0.18,
+      "removal_fraction": 0.10257259640780342,
+      "n": 50
+    }
+  },
+  "test5_injection_recovery": [
+    {
+      "signal": "transit_5",
+      "kind": "transit",
+      "parameter": 5,
+      "median_recovery_ratio": 1.0,
+      "q1_recovery": 0.9999999403953552,
+      "q3_recovery": 1.0000000298023224,
+      "median_correlation": 0.9992870390415192,
+      "median_correction_leak_rel": 0.0023291195144368925
+    },
+    {
+      "signal": "transit_10",
+      "kind": "transit",
+      "parameter": 10,
+      "median_recovery_ratio": 1.0,
+      "q1_recovery": 1.0,
+      "q3_recovery": 1.0,
+      "median_correlation": 0.9986705183982849,
+      "median_correction_leak_rel": 0.00452537854498797
+    },
+    {
+      "signal": "transit_20",
+      "kind": "transit",
+      "parameter": 20,
+      "median_recovery_ratio": 1.0,
+      "q1_recovery": 1.0,
+      "q3_recovery": 1.0,
+      "median_correlation": 0.9970162510871887,
+      "median_correction_leak_rel": 0.009549864508062025
+    },
+    {
+      "signal": "sinusoid_50",
+      "kind": "sinusoid",
+      "parameter": 50,
+      "median_recovery_ratio": 0.9963482320308685,
+      "q1_recovery": 0.9743304997682571,
+      "q3_recovery": 0.9997776597738266,
+      "median_correlation": 0.9867407977581024,
+      "median_correction_leak_rel": 0.1185404511125066
+    },
+    {
+      "signal": "sinusoid_100",
+      "kind": "sinusoid",
+      "parameter": 100,
+      "median_recovery_ratio": 1.0029761791229248,
+      "q1_recovery": 0.999453067779541,
+      "q3_recovery": 1.011544555425644,
+      "median_correlation": 0.9899560809135437,
+      "median_correction_leak_rel": 0.10174761408409903
+    },
+    {
+      "signal": "sinusoid_200",
+      "kind": "sinusoid",
+      "parameter": 200,
+      "median_recovery_ratio": 0.98301562666893,
+      "q1_recovery": 0.9630052000284195,
+      "q3_recovery": 1.0011369287967682,
+      "median_correlation": 0.9907378256320953,
+      "median_correction_leak_rel": 0.10047266180710399
+    },
+    {
+      "signal": "flare_10",
+      "kind": "flare",
+      "parameter": 10,
+      "median_recovery_ratio": 1.0000128149986267,
+      "q1_recovery": 0.999981552362442,
+      "q3_recovery": 1.0000417232513428,
+      "median_correlation": 0.9971595704555511,
+      "median_correction_leak_rel": 0.0060592414241146305
+    }
+  ],
+  "test5_note": "cleaned = raw - correction, so an injection that does not perturb the correction is recovered exactly by construction. median_correction_leak_rel reports how much the injection moved the correction (small = physics untouched).",
+  "criteria": {
+    "correction_tracks_peer_common": true,
+    "peak_lag_near_zero": false,
+    "cleaning_reduces_common_mode": true,
+    "nearest_peers_beat_controls": true,
+    "physics_preserved": true
+  },
+  "verdict": "partial"
+}

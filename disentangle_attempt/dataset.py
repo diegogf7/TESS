@@ -77,7 +77,7 @@ class CrossSectorPatch:
     def __init__(self, parquet_path, target_sector="auto", camera="auto", ccd="auto",
                  curve_length=CURVE_LENGTH, n_peers=N_PEERS, min_valid_fraction=0.5,
                  split_seed=42, max_eligible_anchors=None, min_chip_anchors=64,
-                 verbose=True):
+                 require_cross_sector=False, verbose=True):
         self.curve_length = int(curve_length)
         self.n_peers = int(n_peers)
 
@@ -120,6 +120,10 @@ class CrossSectorPatch:
         self.n_valid = self.M.sum(axis=1)
         self.min_valid = int(min_valid_fraction * self.curve_length)
         self.min_chip_anchors = int(min_chip_anchors)
+        # Reproduces the pre-c74d750 eligibility rule, which also demanded a partner
+        # sector. Needed to rebuild the exact TIC split an older checkpoint trained
+        # with -- otherwise its test stars are not the ones it was held out from.
+        self.require_cross_sector = bool(require_cross_sector)
 
         self.rows_by_tic = {}
         for i, t in enumerate(self.tic):
@@ -156,6 +160,9 @@ class CrossSectorPatch:
         if len(rows) < self.n_peers + 1:
             return np.array([], dtype=np.int64)
         keep = [i for i in rows if self.n_valid[i] >= self.min_valid]
+        if self.require_cross_sector:
+            keep = [i for i in keep
+                    if any(self.sector[j] != key[0] for j in self.rows_by_tic[self.tic[i]])]
         return np.asarray(sorted(keep), dtype=np.int64)
 
     def eligibility_table(self):
