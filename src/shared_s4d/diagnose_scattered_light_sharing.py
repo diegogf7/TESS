@@ -272,8 +272,8 @@ def main():
                "groups": {}, "bootstrap_vs_nearest": {}, "spatial": {}}
     for g in GROUPS:
         sub = df_rows[df_rows.group == g]
-        summary["groups"][g] = {"max_corr": _q(sub.max_corr), "corr": _q(sub.corr),
-                                "cov": _q(sub.cov), "same_sign_frac": float(sub.same_sign_event.mean())
+        summary["groups"][g] = {"max_corr": _q(sub["max_corr"]), "corr": _q(sub["corr"]),
+                                "cov": _q(sub["cov"]), "same_sign_frac": float(sub["same_sign_event"].mean())
                                 if len(sub) else None, "n_pairs": int(len(sub))}
     near_mc = df_rows[df_rows.group == "nearest"].max_corr
     near_share = df_rows[df_rows.group == "nearest"].same_sign_event.astype(float)
