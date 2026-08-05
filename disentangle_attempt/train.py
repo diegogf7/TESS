@@ -25,7 +25,8 @@ from torch.utils.data import DataLoader, RandomSampler
 
 from disentangle_attempt.dataset import (CrossSectorAnchorDataset, CrossSectorPatch,
                                         audit_batch)
-from disentangle_attempt.losses import total_loss
+from disentangle_attempt.losses import total_loss, visible_reconstruction
+from disentangle_attempt.masking import mask_views
 from disentangle_attempt.model import DisentangleModel
 from disentangle_attempt.reference_context import (build_reference_context,
                                                    save_reference_context)
@@ -66,33 +67,50 @@ def to_device(batch, device):
 # ------------------------------------------------------------------ one forward
 def forward_batch(model, batch, config, generator=None, condition=None, patch=None,
                   split=None, rng=None, device=torch.device("cpu")):
-    """Direct cross-sector forward. No artificial masking anywhere.
+    """Mask on CPU (device-independent RNG), optionally corrupt one branch, forward.
 
-    Physics branch  = the anchor TIC's curve from a DIFFERENT sector.
-    Instrument branch = the 8 detector-nearest different TICs in the anchor's sector.
-    Target = the anchor-sector curve, scored on its valid cadences.
+    The reconstruction target, its validity and the hidden mask always belong to the
+    TRUE anchor, so every control keeps the identical loss geometry and only the
+    contents of one branch change.
     """
     anchor_raw = batch["anchor_raw"]
     anchor_valid = batch["anchor_valid_mask"]
-    physics_raw, physics_mask = batch["other_sector_raw"], batch["other_sector_mask"]
+    masked, hidden, visible = mask_views(anchor_raw, anchor_valid,
+                                         config["hidden_fraction"], generator=generator)
+
+    physics_raw, physics_valid = anchor_raw, anchor_valid
     peer_raw, peer_mask = batch["peer_raw"], batch["peer_mask"]
+    other_raw, other_mask = batch["other_sector_raw"], batch["other_sector_mask"]
 
     if condition == "shuffle_physics":
-        roll = torch.roll(torch.arange(len(physics_raw)), 1)     # another TIC entirely
-        physics_raw, physics_mask = physics_raw[roll], physics_mask[roll]
+        roll = torch.roll(torch.arange(len(anchor_raw)), 1)      # another TIC's curve
+        physics_raw, physics_valid = anchor_raw[roll], anchor_valid[roll]
     elif condition == "random_peers":
         rows = patch.random_peer_rows(batch["anchor_row"].numpy(), split, rng)
         peer_raw = torch.from_numpy(patch.X[rows])
         peer_mask = torch.from_numpy(patch.M[rows])
+    elif condition == "wrong_other_sector":
+        roll = torch.roll(torch.arange(len(other_raw)), 1)
+        other_raw, other_mask = other_raw[roll], other_mask[roll]
     elif condition is not None:
         raise ValueError(f"unknown branch-use condition {condition!r}")
 
-    tensors = [physics_raw, physics_mask, peer_raw, peer_mask, anchor_raw, anchor_valid]
-    (physics_raw, physics_mask, peer_raw, peer_mask,
-     anchor_raw, anchor_valid) = [t.to(device) for t in tensors]
+    if condition == "shuffle_physics":                            # same mask geometry
+        masked_physics = physics_raw.masked_fill(hidden, 0.0)
+        physics_visible = physics_valid & ~hidden
+    else:
+        masked_physics, physics_visible = masked, visible
 
-    outputs = model(physics_raw, physics_mask, peer_raw, peer_mask)
-    loss, parts = total_loss(outputs, anchor_raw, anchor_valid)
+    tensors = [masked_physics, physics_visible, peer_raw, peer_mask, hidden,
+               other_raw, other_mask, anchor_raw, anchor_valid]
+    (masked_physics, physics_visible, peer_raw, peer_mask, hidden, other_raw,
+     other_mask, anchor_raw, anchor_valid) = [t.to(device) for t in tensors]
+
+    outputs = model(masked_physics, physics_visible, peer_raw, peer_mask, hidden,
+                    other_raw, other_mask)
+    loss, parts = total_loss(outputs, anchor_raw, anchor_valid,
+                             config["physics_consistency_weight"])
+    parts["visible_reconstruction"] = visible_reconstruction(outputs, anchor_raw, anchor_valid)
     return loss, parts, outputs
 
 
@@ -100,13 +118,14 @@ def evaluate(model, loader, config, device, seed, condition=None, patch=None,
              split=None, max_steps=None):
     """Deterministic evaluation: identical batches under every condition."""
     model.eval()
+    generator = torch.Generator().manual_seed(seed)
     rng = np.random.default_rng(seed)
     totals, n = {}, 0
     with torch.no_grad():
         for step, batch in enumerate(loader):
             if max_steps and step >= max_steps:
                 break
-            _, parts, _ = forward_batch(model, batch, config, None, condition,
+            _, parts, _ = forward_batch(model, batch, config, generator, condition,
                                         patch, split, rng, device)
             weight = len(batch["anchor_raw"])
             for key, value in parts.items():
@@ -128,6 +147,8 @@ def main():
     run_name = args.run_name or config.get("run_name") or time.strftime("fast_%Y%m%d_%H%M%S")
     out_dir = os.path.join(HERE, "outputs", run_name)
     os.makedirs(out_dir, exist_ok=True)
+    if config.get("mask_style", "contiguous_windows") != "contiguous_windows":
+        raise ValueError("only mask_style=contiguous_windows is implemented")
     if config.get("optimizer", "adamw").lower() != "adamw":
         raise ValueError("only optimizer=adamw is implemented")
     set_seed(config["seed"])
@@ -178,8 +199,9 @@ def main():
     history_path = os.path.join(out_dir, "history.csv")
     history_file = open(history_path, "w", newline="")
     writer = csv.writer(history_file)
-    writer.writerow(["epoch", "train_reconstruction", "val_reconstruction",
-                     "seconds", "wall_minutes"])
+    writer.writerow(["epoch", "train_total", "train_reconstruction", "train_sector_consistency",
+                     "val_total", "val_reconstruction", "val_sector_consistency",
+                     "val_visible_reconstruction", "seconds", "wall_minutes"])
 
     start = time.time()
     best = {"val_reconstruction": float("inf"), "epoch": -1}
@@ -191,9 +213,11 @@ def main():
         datasets["train"].set_epoch(epoch)
         epoch_start = time.time()
         sums, steps = {}, 0
+        generator = torch.Generator().manual_seed(config["seed"] * 1000 + epoch)
         for step_batch in train_loader:
             with torch.autocast("cuda", enabled=use_amp):
-                loss, parts, _ = forward_batch(model, step_batch, config, device=device)
+                loss, parts, _ = forward_batch(model, step_batch, config, generator,
+                                               device=device)
             optimizer.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -208,18 +232,22 @@ def main():
                                max_steps=config.get("max_val_steps_per_epoch"))
 
         elapsed = time.time() - start
-        writer.writerow([epoch, train_metrics["reconstruction"],
-                         val_metrics["reconstruction"],
+        writer.writerow([epoch, train_metrics["total"], train_metrics["reconstruction"],
+                         train_metrics["sector_consistency"], val_metrics["total"],
+                         val_metrics["reconstruction"], val_metrics["sector_consistency"],
+                         val_metrics["visible_reconstruction"],
                          round(time.time() - epoch_start, 2), round(elapsed / 60, 2)])
         history_file.flush()
-        print(f"epoch {epoch}: train recon {train_metrics['reconstruction']:.4f} | "
-              f"val recon {val_metrics['reconstruction']:.4f} "
+        print(f"epoch {epoch}: train recon {train_metrics['reconstruction']:.4f} "
+              f"cons {train_metrics['sector_consistency']:.4f} | val recon "
+              f"{val_metrics['reconstruction']:.4f} cons {val_metrics['sector_consistency']:.4f} "
               f"| {time.time() - epoch_start:.1f}s", flush=True)
 
         torch.save({"model": model.state_dict(), "config": config, "epoch": epoch},
                    os.path.join(out_dir, "last.pt"))
         if val_metrics["reconstruction"] < best["val_reconstruction"]:
-            best = {"val_reconstruction": val_metrics["reconstruction"], "epoch": epoch}
+            best = {"val_reconstruction": val_metrics["reconstruction"], "epoch": epoch,
+                    "val_sector_consistency": val_metrics["sector_consistency"]}
             since_best = 0
             torch.save({"model": model.state_dict(), "config": config, "epoch": epoch,
                         "target": patch.target}, os.path.join(out_dir, "best.pt"))
@@ -242,24 +270,27 @@ def main():
     baseline = evaluate(model, val_loader, config, device, seed=config["seed"],
                         max_steps=config.get("max_val_steps_per_epoch"))
     branch = {"baseline": baseline, "conditions": {}}
-    for condition in ("shuffle_physics", "random_peers"):
+    for condition in ("shuffle_physics", "random_peers", "wrong_other_sector"):
         scores = evaluate(model, val_loader, config, device, seed=config["seed"],
                           condition=condition, patch=patch, split="val",
                           max_steps=config.get("max_val_steps_per_epoch"))
         branch["conditions"][condition] = {
             "metrics": scores,
             "delta_reconstruction": scores["reconstruction"] - baseline["reconstruction"],
+            "delta_sector_consistency": (scores["sector_consistency"]
+                                         - baseline["sector_consistency"]),
         }
     branch["verdicts"] = {
-        "cross_sector_physics_branch_used":
-            bool(branch["conditions"]["shuffle_physics"]["delta_reconstruction"] > 0),
-        "instrument_branch_used":
-            bool(branch["conditions"]["random_peers"]["delta_reconstruction"] > 0),
+        "physics_branch_used": bool(branch["conditions"]["shuffle_physics"]["delta_reconstruction"] > 0),
+        "instrument_branch_used": bool(branch["conditions"]["random_peers"]["delta_reconstruction"] > 0),
+        "cross_sector_branch_used": bool(
+            branch["conditions"]["wrong_other_sector"]["delta_sector_consistency"] > 0),
     }
     with open(os.path.join(out_dir, "branch_use_tests.json"), "w") as handle:
         json.dump(branch, handle, indent=2)
     for name, result in branch["conditions"].items():
-        print(f"branch-use {name}: d_recon {result['delta_reconstruction']:+.4f}", flush=True)
+        print(f"branch-use {name}: d_recon {result['delta_reconstruction']:+.4f} "
+              f"d_consistency {result['delta_sector_consistency']:+.4f}", flush=True)
 
     # -------------------------------------------------------- quiet reference set
     reference = build_reference_context(patch, split="train", n_peers=config["n_peers"])
@@ -281,6 +312,7 @@ def main():
         "stop_reason": stop_reason,
         "best_epoch": best["epoch"],
         "best_val_reconstruction": best["val_reconstruction"],
+        "best_val_sector_consistency": best.get("val_sector_consistency"),
         "test": test_metrics,
         "branch_use_tests": branch,
         "reference_context": reference_meta,

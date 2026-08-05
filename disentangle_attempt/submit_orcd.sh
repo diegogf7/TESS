@@ -54,5 +54,7 @@ $PY -m disentangle_attempt.smoke_test
 $PY -m disentangle_attempt.train --config "$CONFIG" --parquet "$PARQUET" --run-name "$RUN_NAME"
 $PY -m disentangle_attempt.infer \
     --checkpoint "disentangle_attempt/outputs/$RUN_NAME/best.pt" --parquet "$PARQUET"
+$PY -m disentangle_attempt.plot_curves \
+    --checkpoint "disentangle_attempt/outputs/$RUN_NAME/best.pt" --parquet "$PARQUET" --n-stars 6
 
 echo "done: disentangle_attempt/outputs/$RUN_NAME"

@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 
 from disentangle_attempt.dataset import CrossSectorPatch
 from disentangle_attempt.infer import dual_context_prediction
+from disentangle_attempt.masking import complementary_masks
 from disentangle_attempt.model import DisentangleModel
 from disentangle_attempt.reference_context import load_reference_context
 from disentangle_attempt.train import DEFAULT_PARQUET, pick_device
@@ -53,41 +54,38 @@ def main():
 
     sector = patch.target[0]
     quiet = load_reference_context(out_dir, expected_cadence_ids=patch.grids[sector])
+    masks = complementary_masks(config["curve_length"], n_masks=4)
 
     rows = [int(r) for r in patch.split_anchors["test"][:args.n_stars]]
-    others = [int(patch.other_sector_rows(r)[0]) for r in rows]
     peers = np.stack([patch.peers_for_row(r, "test")[0] for r in rows])
-    for anchor, other in zip(rows, others):
-        assert patch.tic[anchor] == patch.tic[other]
-        assert patch.sector[anchor] != patch.sector[other]
-
-    pred_actual, pred_reference, _, _, _ = dual_context_prediction(
-        model,
-        torch.from_numpy(patch.X[others]), torch.from_numpy(patch.M[others]),
+    raw = torch.from_numpy(patch.X[rows])
+    valid = torch.from_numpy(patch.M[rows])
+    _, cleaned, _, _, _ = dual_context_prediction(
+        model, raw, valid,
         torch.from_numpy(patch.X[peers]), torch.from_numpy(patch.M[peers]),
         quiet["peer_raw"].unsqueeze(0).expand(len(rows), -1, -1),
-        quiet["peer_mask"].unsqueeze(0).expand(len(rows), -1, -1), device)
-    correction = (pred_actual - pred_reference).numpy()
+        quiet["peer_mask"].unsqueeze(0).expand(len(rows), -1, -1), masks, device)
 
-    fig, axes = plt.subplots(len(rows), 1, figsize=(11, 2.4 * len(rows)), sharex=True)
+    hidden = masks[args.mask_index].numpy()
+    fig, axes = plt.subplots(len(rows), 1, figsize=(11, 2.2 * len(rows)), sharex=True)
     axes = np.atleast_1d(axes)
-    for k, (ax, anchor, other) in enumerate(zip(axes, rows, others)):
-        keep, keep_o = patch.M[anchor], patch.M[other]
-        x = np.arange(patch.curve_length)
-        cleaned = patch.X[anchor] - correction[k]
-        ax.scatter(x[keep], patch.X[anchor][keep], s=2.4, color="0.6", linewidths=0,
-                   label=f"anchor target (sector {patch.sector[anchor]})")
-        ax.scatter(x[keep_o], patch.X[other][keep_o], s=2.4, color="tab:orange",
-                   linewidths=0,
-                   label=f"physics encoder input (SAME TIC, sector {patch.sector[other]})")
-        ax.scatter(x[keep], cleaned[keep], s=2.4, color="tab:blue", linewidths=0,
-                   label="cleaned = anchor - correction")
-        ax.set_ylabel(f"TIC {patch.tic[anchor]}", fontsize=7)
+    for ax, row, curve in zip(axes, rows, cleaned):
+        keep = patch.M[row]
+        x = np.arange(len(keep))
+        # Both series exist at EVERY valid cadence; the encoder input is the anchor
+        # where visible and normalized zero where hidden -- literally what it is fed.
+        encoder_input = np.where(hidden, 0.0, patch.X[row])
+        ax.scatter(x[keep], patch.X[row][keep], s=11, color="0.72", linewidths=0,
+                   label="anchor / raw target (all valid cadences)")
+        ax.scatter(x[keep], encoder_input[keep], s=2.0, color="tab:orange", linewidths=0,
+                   label=f"physics encoder input (mask {args.mask_index}: hidden -> 0)")
+        ax.scatter(x[keep], curve.numpy()[keep], s=2.0, color="tab:blue", linewidths=0,
+                   label="cleaned")
+        ax.set_ylabel(f"TIC {patch.tic[row]}", fontsize=7)
     axes[0].legend(loc="upper right", fontsize=7, ncol=3, markerscale=4)
-    axes[-1].set_xlabel("cadence index within each curve's OWN sector grid "
-                        "(the two sectors are different absolute times)")
-    fig.suptitle(f"anchor vs cross-sector physics input vs cleaned - sector {sector} "
-                 f"cam{patch.target[1]}-ccd{patch.target[2]} (test stars)", fontsize=11)
+    axes[-1].set_xlabel("cadence index")
+    fig.suptitle(f"raw vs cleaned - sector {sector} cam{patch.target[1]}-ccd{patch.target[2]}"
+                 " (test stars)", fontsize=11)
     fig.tight_layout()
     path = args.out or os.path.join(out_dir, "raw_vs_cleaned.png")
     fig.savefig(path, dpi=120)

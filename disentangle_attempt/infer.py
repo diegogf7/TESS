@@ -28,6 +28,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from disentangle_attempt.dataset import CrossSectorPatch
+from disentangle_attempt.masking import complementary_masks
 from disentangle_attempt.model import DisentangleModel
 from disentangle_attempt.reference_context import load_reference_context
 from disentangle_attempt.train import DEFAULT_PARQUET, pick_device
@@ -37,24 +38,42 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 # ------------------------------------------------------------------- prediction
 @torch.no_grad()
-def dual_context_prediction(model, physics_raw, physics_mask, actual_peers,
-                            actual_peer_mask, quiet_peers, quiet_peer_mask, device):
-    """One cross-sector physics pass, decoded against both instrument contexts.
+def dual_context_prediction(model, raw, valid, actual_peers, actual_peer_mask,
+                            quiet_peers, quiet_peer_mask, masks, device, stitch=True):
+    """Predictions under both instrument contexts, sharing one physics pass per mask.
 
-    physics_raw/mask [B, L] are the anchor TIC's DIFFERENT-sector curve; peers
-    [B, P, L] sit on the anchor sector's cadence grid. Returns pred_actual,
-    pred_reference, physics tokens and both peer token sets.
+    raw/valid [B, L]; peers [B, P, L]; masks [K, L]. Returns actual [B, L],
+    cleaned [B, L], physics tokens [B, K, T, D] and both peer token sets.
+
+    stitch=True keeps only each mask's hidden block, so every cadence was predicted
+    while invisible to the physics encoder.
     """
-    physics_tokens = model.encode_physics(physics_raw.to(device), physics_mask.to(device))
-    latent = physics_tokens.flatten(1)
+    if not stitch and masks.shape[0] != 1:
+        raise ValueError("stitch=False expects exactly one mask")
+    B, L = raw.shape
+    raw, valid = raw.to(device), valid.to(device)
     actual_tokens, actual_context = model.encode_peers(actual_peers.to(device),
                                                        actual_peer_mask.to(device))
     quiet_tokens, quiet_context = model.encode_peers(quiet_peers.to(device),
                                                      quiet_peer_mask.to(device))
-    pred_actual = model.decoder(torch.cat([latent, actual_context], dim=-1))
-    pred_reference = model.decoder(torch.cat([latent, quiet_context], dim=-1))
-    return (pred_actual.cpu(), pred_reference.cpu(), physics_tokens.cpu(),
-            actual_tokens.cpu(), quiet_tokens.cpu())
+
+    actual_prediction = torch.zeros(B, L, device=device)
+    cleaned_prediction = torch.zeros(B, L, device=device)
+    physics_tokens = []
+    for k in range(masks.shape[0]):
+        hidden = masks[k].to(device).unsqueeze(0).expand(B, L)
+        tokens = model.encode_physics(raw.masked_fill(hidden, 0.0), valid & ~hidden)
+        latent = tokens.flatten(1)
+        with_actual = model.decoder(torch.cat([latent, actual_context], dim=-1))
+        with_quiet = model.decoder(torch.cat([latent, quiet_context], dim=-1))
+        if stitch:
+            actual_prediction[:, masks[k]] = with_actual[:, masks[k]]
+            cleaned_prediction[:, masks[k]] = with_quiet[:, masks[k]]
+        else:
+            actual_prediction, cleaned_prediction = with_actual, with_quiet
+        physics_tokens.append(tokens)
+    return (actual_prediction.cpu(), cleaned_prediction.cpu(),
+            torch.stack(physics_tokens, dim=1).cpu(), actual_tokens.cpu(), quiet_tokens.cpu())
 
 
 # ------------------------------------------------------------------------ plots
@@ -96,22 +115,27 @@ def plot_history(history_csv, branch_json, path):
 
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.2))
     axes[0].plot(epochs, [float(r["train_reconstruction"]) for r in rows], "o-",
-                 color="tab:blue", label="train")
+                 color="tab:blue", label="train (hidden cadences)")
     axes[0].plot(epochs, [float(r["val_reconstruction"]) for r in rows], "o-",
-                 color="tab:red", label="validation")
+                 color="tab:red", label="validation (hidden cadences)")
+    axes[0].plot(epochs, [float(r["val_visible_reconstruction"]) for r in rows], "o--",
+                 color="0.6", lw=1, label="validation (visible cadences)")
     axes[0].set_xlabel("epoch")
-    axes[0].set_ylabel("masked L1 (valid cadences)")
+    axes[0].set_ylabel("masked smooth-L1 (hidden cadences)")
     axes[0].set_title("reconstruction loss", fontsize=10)
     axes[0].legend(fontsize=8)
 
     with open(branch_json) as handle:
         branch = json.load(handle)
-    labels = {"shuffle_physics": "cross-sector physics ->\ndifferent TIC",
-              "random_peers": "nearest peers ->\nrandom same-chip peers"}
+    labels = {"shuffle_physics": "physics inputs\nshuffled across TICs",
+              "random_peers": "nearest peers ->\nrandom same-chip peers",
+              "wrong_other_sector": "cross-sector curve ->\ndifferent TIC"}
     names = [n for n in labels if n in branch["conditions"]]
     recon = [branch["conditions"][n]["delta_reconstruction"] for n in names]
+    cons = [branch["conditions"][n].get("delta_sector_consistency", 0.0) for n in names]
     x = np.arange(len(names))
-    axes[1].bar(x, recon, 0.5, color="tab:red", label="Δ reconstruction")
+    axes[1].bar(x - 0.18, recon, 0.36, color="tab:red", label="Δ reconstruction")
+    axes[1].bar(x + 0.18, cons, 0.36, color="tab:purple", label="Δ sector consistency")
     axes[1].axhline(0, color="0.4", lw=0.8)
     axes[1].set_xticks(x)
     axes[1].set_xticklabels([labels[n] for n in names], fontsize=7)
@@ -154,43 +178,36 @@ def main():
 
     sector = patch.target[0]
     quiet = load_reference_context(out_dir, expected_cadence_ids=patch.grids[sector])
+    masks = complementary_masks(config["curve_length"], n_masks=4)
 
     row = (patch.row_for_tic(args.tic_id) if args.tic_id
            else int(patch.split_anchors["test"][0]))
     split = patch.split_of_tic(patch.tic[row])
     peer_rows, peer_distances = patch.peers_for_row(row, split)
-    others = patch.other_sector_rows(row)
-    assert others, "inference needs the same TIC in a different sector"
-    other = int(others[0])
-    assert patch.tic[other] == patch.tic[row] and patch.sector[other] != patch.sector[row]
-    print(f"target TIC {patch.tic[row]} (split {split}), anchor sector {sector} "
-          f"cam{patch.target[1]}-ccd{patch.target[2]}; physics from sector "
-          f"{patch.sector[other]}", flush=True)
+    print(f"target TIC {patch.tic[row]} (split {split}), sector {sector} "
+          f"cam{patch.target[1]}-ccd{patch.target[2]}", flush=True)
 
-    pred_actual, pred_reference, physics_tokens, actual_tokens, quiet_tokens = (
-        dual_context_prediction(
-            model,
-            torch.from_numpy(patch.X[other]).unsqueeze(0),
-            torch.from_numpy(patch.M[other]).unsqueeze(0),
-            torch.from_numpy(patch.X[peer_rows]).unsqueeze(0),
-            torch.from_numpy(patch.M[peer_rows]).unsqueeze(0),
-            quiet["peer_raw"].unsqueeze(0), quiet["peer_mask"].unsqueeze(0), device))
+    raw = torch.from_numpy(patch.X[row]).unsqueeze(0)
+    valid = torch.from_numpy(patch.M[row]).unsqueeze(0)
+    actual, cleaned, physics_tokens, actual_tokens, quiet_tokens = dual_context_prediction(
+        model, raw, valid,
+        torch.from_numpy(patch.X[peer_rows]).unsqueeze(0),
+        torch.from_numpy(patch.M[peer_rows]).unsqueeze(0),
+        quiet["peer_raw"].unsqueeze(0), quiet["peer_mask"].unsqueeze(0), masks, device)
 
     raw_np = patch.X[row]
-    correction = (pred_actual - pred_reference)[0].numpy()
-    cleaned = raw_np - correction
+    cleaned_np = cleaned[0].numpy()
+    correction = raw_np - cleaned_np
     output_mask = patch.M[row]
     cadence_ids = patch.grids[sector]
 
     np.savez(
         os.path.join(out_dir, "inference_arrays.npz"),
         tic_id=np.int64(patch.tic_int[row]), sector=np.int64(sector),
-        physics_sector=np.int64(patch.sector[other]),
         camera=np.int64(patch.target[1]), ccd=np.int64(patch.target[2]),
         cadence_ids=cadence_ids, raw_target=raw_np, target_valid_mask=output_mask,
-        actual_context_prediction=pred_actual[0].numpy(),
-        reference_context_prediction=pred_reference[0].numpy(),
-        correction_curve=correction, cleaned_curve=cleaned, output_mask=output_mask,
+        actual_context_prediction=actual[0].numpy(),
+        cleaned_curve=cleaned_np, correction_curve=correction, output_mask=output_mask,
         physics_tokens=physics_tokens[0].numpy(),
         actual_instrument_tokens=actual_tokens[0].numpy(),
         reference_instrument_tokens=quiet_tokens[0].numpy(),
@@ -198,10 +215,10 @@ def main():
         actual_peer_distances=peer_distances,
         quiet_peer_tic_ids=np.asarray([patch.tic_int[int(r)] for r in quiet["peer_rows"]]))
 
-    plot_correction(cadence_ids, raw_np, pred_actual[0].numpy(), cleaned, correction,
+    plot_correction(cadence_ids, raw_np, actual[0].numpy(), cleaned_np, correction,
                     output_mask,
-                    f"TIC {patch.tic[row]} - anchor sector {sector} cam{patch.target[1]}"
-                    f"-ccd{patch.target[2]}, physics from sector {patch.sector[other]}",
+                    f"TIC {patch.tic[row]} - sector {sector} cam{patch.target[1]}"
+                    f"-ccd{patch.target[2]}: raw vs quiet-context counterfactual",
                     os.path.join(out_dir, "example_correction.png"))
     print(f"correction RMS {np.sqrt((correction[output_mask] ** 2).mean()):.4f} "
           f"(normalized MAD units); wrote inference_arrays.npz, example_correction.png",

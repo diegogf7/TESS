@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader
 from disentangle_attempt.dataset import (CrossSectorAnchorDataset, CrossSectorPatch,
                                         audit_batch)
 from disentangle_attempt.losses import total_loss
+from disentangle_attempt.masking import complementary_masks, mask_views
 from disentangle_attempt.model import DisentangleModel
 from disentangle_attempt.train import DEFAULT_PARQUET, forward_batch, load_config, pick_device
 
@@ -125,40 +126,48 @@ def check_shared_preprocessing(patch, batch):
           f"{patch.M.mean():.1%} of the grid is valid)")
 
 
-def check_no_masking(patch, batch):
-    """No artificial masking may remain: the physics input is the other-sector curve
-    as stored, and its only zeros are quality-filtered gaps."""
-    physics = batch["other_sector_raw"].numpy()
-    mask = batch["other_sector_mask"].numpy()
-    rows = batch["other_row"].numpy()
-    assert np.allclose(physics, patch.X[rows]), "physics input was altered before the encoder"
-    assert (mask == patch.M[rows]).all(), "physics mask was altered before the encoder"
-    assert float(np.abs(physics[~mask]).max()) == 0.0, "invalid cadences must be zero"
-    zero_and_valid = int(((physics == 0.0) & mask).sum())
-    print(f"  no artificial masking OK (physics input is the stored other-sector curve; "
-          f"{mask.mean():.1%} valid, {zero_and_valid} zeros among valid cadences)")
+def check_masking(batch):
+    generator = torch.Generator().manual_seed(0)
+    masked, hidden, visible = mask_views(batch["anchor_raw"], batch["anchor_valid_mask"],
+                                         CONFIG["hidden_fraction"], generator=generator)
+    assert masked.shape == (B, L) and hidden.shape == (B, L) and visible.shape == (B, L)
+    assert bool((hidden & ~batch["anchor_valid_mask"]).sum() == 0), \
+        "hidden cadences must be a subset of valid cadences"
+    assert bool((hidden & visible).sum() == 0), "hidden and visible must be disjoint"
+    assert float(masked[hidden].abs().max()) == 0.0, "hidden values must be zeroed"
+    fraction = (hidden.sum(1).float() / batch["anchor_valid_mask"].sum(1).float()).mean()
+    assert 0.15 < float(fraction) < 0.40, f"hidden fraction {float(fraction):.3f} off target"
+    runs = (hidden[:, 1:] & ~hidden[:, :-1]).sum(1).float().mean()
+    assert float(runs) < 20, f"masking is not contiguous enough ({float(runs):.1f} runs/row)"
+    masks = complementary_masks(L, n_masks=4)
+    assert masks.shape == (4, L) and bool((masks.sum(0) == 1).all())
+    print(f"  masking OK (hidden {float(fraction):.3f} of valid, "
+          f"{float(runs):.1f} windows/row, 4 complementary masks tile the curve)")
 
 
 def check_forward_and_gradients(batch, device):
     model = DisentangleModel(d_model=CONFIG["d_model"], n_layers=CONFIG["n_layers"],
                              dropout=0.0, n_peers=P, n_tokens=T, token_dim=D,
                              curve_length=L).to(device)
-    loss, parts, outputs = forward_batch(model, batch, CONFIG, device=device)
+    generator = torch.Generator().manual_seed(0)
+    loss, parts, outputs = forward_batch(model, batch, CONFIG, generator, device=device)
 
-    expected = {"predicted_raw_anchor": (B, L), "physics_tokens": (B, T, D),
-                "physics_latent": (B, T * D), "peer_instrument_tokens": (B, P, T, D),
-                "instrument_context": (B, P * T * D),
+    expected = {"predicted_raw_anchor": (B, L), "current_physics_tokens": (B, T, D),
+                "other_sector_physics_tokens": (B, T, D), "current_global_physics": (B, D),
+                "other_sector_global_physics": (B, D), "peer_instrument_tokens": (B, P, T, D),
+                "instrument_context": (B, P * T * D), "hidden_mask": (B, L),
                 "decoder_input": (B, (P + 1) * T * D)}
     for key, shape in expected.items():
         assert tuple(outputs[key].shape) == shape, \
             f"{key}: expected {shape}, got {tuple(outputs[key].shape)}"
-    assert outputs["physics_latent"].shape == (B, 512), "physics latent must be [batch, 512]"
+    assert outputs["current_physics_latent"].shape == (B, 512), "physics latent must be [batch, 512]"
     assert outputs["instrument_context"].shape == (B, 4096), "instrument must be [batch, 4096]"
     assert outputs["decoder_input"].shape == (B, 4608), "decoder input must be [batch, 4608]"
     assert outputs["predicted_raw_anchor"].shape == (B, 1024), "decoder output must be [batch, 1024]"
     assert torch.isfinite(loss) and float(loss.detach()) > 0
     print(f"  forward OK: physics [B,512], instrument [B,4096], decoder in [B,4608] "
-          f"out [B,1024] (loss {float(loss.detach()):.4f})")
+          f"out [B,1024] (loss {float(loss.detach()):.4f}, "
+          f"recon {parts['reconstruction']:.4f}, cons {parts['sector_consistency']:.4f})")
 
     loss.backward()
     groups = {"physics_s4d": model.physics_encoder, "instrument_s4d": model.instrument_encoder,
@@ -182,7 +191,8 @@ def tiny_overfit(batches, device, steps=OVERFIT_STEPS):
     first, last = None, None
     for step in range(steps):
         batch = batches[step % len(batches)]
-        loss, parts, _ = forward_batch(model, batch, CONFIG, device=device)
+        generator = torch.Generator().manual_seed(step % len(batches))  # fixed masks
+        loss, parts, _ = forward_batch(model, batch, CONFIG, generator, device=device)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), CONFIG["gradient_clip"])
@@ -220,11 +230,10 @@ def main():
     if patch is not None:
         print("[2/5] shared preprocessing")
         check_shared_preprocessing(patch, batch)
-        print("[3/5] cross-sector contract + no artificial masking")
+        print("[3/5] data contract audit")
         audit_batch(patch, batch)
-        check_no_masking(patch, batch)
-    else:
-        print("[3/5] skipped (synthetic patch)")
+    print("[3b/5] masking")
+    check_masking(batch)
     print("[4/5] forward and gradient flow")
     check_forward_and_gradients(batch, device)
     print(f"[5/5] tiny overfit on {len(batches)} steps")

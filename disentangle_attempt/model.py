@@ -92,23 +92,35 @@ class DisentangleModel(nn.Module):
         return F.normalize(tokens.mean(dim=1), dim=-1)
 
     # ------------------------------------------------------------------- forward
-    def forward(self, physics_raw, physics_mask, peer_raw, peer_mask):
-        """Direct cross-sector: the physics encoder sees ONLY the anchor TIC's curve
-        from a DIFFERENT sector. No anchor-sector flux reaches it, and there is no
-        artificial masking anywhere -- the only gaps come from quality filtering."""
-        physics_tokens = self.encode_physics(physics_raw, physics_mask)
+    def forward(self, masked_anchor_raw, physics_input_mask, peer_raw, peer_mask,
+                hidden_mask, other_sector_raw=None, other_sector_mask=None):
+        """Masked same-sector physics + detector-peer instrument context.
+
+        The physics encoder sees the anchor's OWN sector with ~25% of its valid
+        cadences hidden, so it carries that star's local timing but cannot copy the
+        withheld values. The cross-sector curve only regularizes the shared physics
+        weights through a pooled global vector; it never reaches the decoder.
+        """
+        current_physics_tokens = self.encode_physics(masked_anchor_raw, physics_input_mask)
         peer_instrument_tokens, instrument_context = self.encode_peers(peer_raw, peer_mask)
 
-        physics_latent = physics_tokens.flatten(1)                    # [B, 512]
+        physics_latent = current_physics_tokens.flatten(1)                      # [B, 512]
         decoder_input = torch.cat([physics_latent, instrument_context], dim=-1)  # [B, 4608]
-        return {
-            "predicted_raw_anchor": self.decoder(decoder_input),      # [B, 1024]
-            "physics_tokens": physics_tokens,                         # [B, 32, 16]
-            "physics_latent": physics_latent,                         # [B, 512]
-            "peer_instrument_tokens": peer_instrument_tokens,         # [B, 8, 32, 16]
-            "instrument_context": instrument_context,                 # [B, 4096]
+        outputs = {
+            "predicted_raw_anchor": self.decoder(decoder_input),                # [B, 1024]
+            "current_physics_tokens": current_physics_tokens,                   # [B, 32, 16]
+            "current_physics_latent": physics_latent,
+            "current_global_physics": self.global_physics(current_physics_tokens),
+            "peer_instrument_tokens": peer_instrument_tokens,                   # [B, 8, 32, 16]
+            "instrument_context": instrument_context,                           # [B, 4096]
             "decoder_input": decoder_input,
+            "hidden_mask": hidden_mask,
         }
+        if other_sector_raw is not None:
+            other_tokens = self.encode_physics(other_sector_raw, other_sector_mask)
+            outputs["other_sector_physics_tokens"] = other_tokens
+            outputs["other_sector_global_physics"] = self.global_physics(other_tokens)
+        return outputs
 
     def parameter_count(self):
         groups = {"physics_s4d": self.physics_encoder, "instrument_s4d": self.instrument_encoder,
