@@ -21,8 +21,13 @@ How a compact, cross-sector-rich patch is found without scanning multi-GB indexe
    are ``f"{gaia_id // 100000:016d}"`` split into groups of four. So the partner
    sector's URLs are constructed directly, with no second index scan.
 
+    # one chip (default)
     python -m disentangle_attempt.fetch_data
-Env: DA_DATA_DIR, SECTOR_A, CAMERA, CCD, N_STARS, N_WORKERS, MIN_POINTS.
+    # the whole primary mission, four chips per sector
+    SECTORS=$(seq -s, 1 26) CHIPS=1-1,2-2,3-3,4-4 N_STARS=1500 \
+        python -m disentangle_attempt.fetch_data
+
+Env: DA_DATA_DIR, SECTORS, CHIPS, N_STARS (per sector per chip), N_WORKERS, MIN_POINTS.
 """
 
 import os
@@ -40,10 +45,16 @@ DATA_DIR = os.environ.get("DA_DATA_DIR", os.path.join(HERE, "data"))
 FITS_DIR = os.path.join(DATA_DIR, "fits")
 OUT_PARQUET = os.path.join(DATA_DIR, "cross_sector_raw.parquet")
 
-SECTOR_A = int(os.environ.get("SECTOR_A", "1"))
-CAMERA = int(os.environ.get("CAMERA", "4"))          # CVZ camera in sectors 1-13
-CCD = int(os.environ.get("CCD", "2"))
-N_STARS = int(os.environ.get("N_STARS", "2000"))
+# SECTORS/CHIPS drive the multi-chip fetch. Sectors 1-26 are the primary mission and
+# are ALL 30-minute FFIs, so their cadence grids are directly comparable; sector 27+
+# switch to 10-minute and must not be mixed in.
+SECTORS = tuple(int(v) for v in os.environ.get("SECTORS", "1").split(",") if v.strip())
+CHIPS = tuple(tuple(int(x) for x in pair.split("-"))
+              for pair in os.environ.get("CHIPS", "4-2").split(",") if pair.strip())
+SECTOR_A = int(os.environ.get("SECTOR_A", str(SECTORS[0])))
+CAMERA = int(os.environ.get("CAMERA", str(CHIPS[0][0])))   # CVZ camera in sectors 1-13
+CCD = int(os.environ.get("CCD", str(CHIPS[0][1])))
+N_STARS = int(os.environ.get("N_STARS", "2000"))           # per sector per chip
 N_WORKERS = int(os.environ.get("N_WORKERS", "12"))
 MIN_POINTS = int(os.environ.get("MIN_POINTS", "200"))
 CANDIDATE_SECTORS = tuple(range(1, 27))              # TGLC v1 primary mission
@@ -241,58 +252,56 @@ def tess_point_all(gaia_ids, ra, dec):
 
 
 # --------------------------------------------------------------------------- main
+def fetch_chip(sector, camera, ccd, n_stars):
+    """Download and extract one sector/camera/CCD block; returns a DataFrame."""
+    patch = collect_patch(sector, camera, ccd, n_stars)
+    if not patch:
+        print(f"  s{sector:04d} cam{camera}-ccd{ccd}: no index lines, skipping", flush=True)
+        return None
+    print(f"s{sector:04d} cam{camera}-ccd{ccd}: {len(patch)} index lines", flush=True)
+    paths = download_many([rel for _, rel in patch], f"s{sector:04d} cam{camera}-ccd{ccd}")
+    if not paths:
+        return None
+    frame = extract_many(paths)
+    if frame.empty:
+        return None
+    print(f"  -> {len(frame)} curves extracted", flush=True)
+    return frame
+
+
 def main():
     os.makedirs(FITS_DIR, exist_ok=True)
     if os.path.exists(OUT_PARQUET):
         print(f"{OUT_PARQUET} already exists -- nothing to do")
         return
 
-    patch = collect_patch(SECTOR_A, CAMERA, CCD, N_STARS)
-    print(f"sector {SECTOR_A} cam{CAMERA}-ccd{CCD}: {len(patch)} consecutive index lines", flush=True)
-    paths_a = download_many([rel for _, rel in patch], f"sector-{SECTOR_A}")
-    frame_a = extract_many(paths_a)
-    if frame_a.empty:
-        raise SystemExit("no usable sector-A curves")
-    print(f"sector {SECTOR_A}: {len(frame_a)} curves extracted", flush=True)
+    if any(s > 26 for s in SECTORS):
+        raise SystemExit("sectors 27+ are 10-minute FFIs; do not mix them with 1-26")
 
-    positions = tess_point_all(frame_a["GAIADR3"].to_numpy(),
-                               frame_a["ra"].to_numpy(), frame_a["dec"].to_numpy())
+    frames = []
+    for sector in SECTORS:
+        for camera, ccd in CHIPS:
+            frame = fetch_chip(sector, camera, ccd, N_STARS)
+            if frame is not None:
+                frames.append(frame)
+    if not frames:
+        raise SystemExit("no usable curves downloaded")
+    frame_a = pd.concat(frames, ignore_index=True)
+    print(f"total: {len(frame_a)} curves over {len(SECTORS)} sectors x {len(CHIPS)} chips",
+          flush=True)
 
-    if not WANT_PARTNER:
-        frame = frame_a.copy()
-        frame["TIC"] = frame["TIC"].astype(str)
-        merged = frame.merge(positions, on=["GAIADR3", "sector", "camera", "ccd"],
-                             how="left")
-        missing = int(merged["DETECTOR_X"].isna().sum())
-        if missing:
-            print(f"dropping {missing} rows without a tess-point solution", flush=True)
-            merged = merged[merged["DETECTOR_X"].notna()].reset_index(drop=True)
-        os.makedirs(DATA_DIR, exist_ok=True)
-        merged.to_parquet(OUT_PARQUET)
-        print(f"wrote {OUT_PARQUET}: {len(merged)} rows, {merged['TIC'].nunique()} TICs "
-              f"(single sector {SECTOR_A}; set PARTNER_SECTOR=1 for cross-sector data)",
-              flush=True)
-        return
+    # tess-point per sector: DETECTOR_X/Y must come from the star's OWN sector solution.
+    positions = []
+    for sector, group in frame_a.groupby("sector"):
+        table = tess_point_all(group["GAIADR3"].to_numpy(), group["ra"].to_numpy(),
+                               group["dec"].to_numpy())
+        positions.append(table[table["sector"] == int(sector)])
+    positions = pd.concat(positions, ignore_index=True).drop_duplicates(
+        ["GAIADR3", "sector", "camera", "ccd"])
 
-    # Partner sector: the one re-observing the most of these stars (any camera/CCD).
-    counts = (positions[(positions["sector"] != SECTOR_A)
-                        & positions["sector"].isin(CANDIDATE_SECTORS)]
-              .groupby("sector")["GAIADR3"].nunique().sort_values(ascending=False))
-    print("cross-sector availability (top 5):\n" + counts.head().to_string(), flush=True)
-    sector_b = int(counts.index[0])
-
-    partner = positions[positions["sector"] == sector_b]
-    partner = partner[partner["GAIADR3"].isin(set(frame_a["GAIADR3"].tolist()))]
-    rels_b = [tglc_rel_path(g, sector_b, c, d) for g, c, d
-              in zip(partner["GAIADR3"], partner["camera"], partner["ccd"])]
-    paths_b = download_many(rels_b, f"sector-{sector_b}")
-    frame_b = extract_many(paths_b)
-    print(f"sector {sector_b}: {len(frame_b)} curves extracted", flush=True)
-
-    frame = pd.concat([frame_a, frame_b], ignore_index=True)
-    frame["TIC"] = frame["TIC"].astype(str)
-    merged = frame.merge(positions, on=["GAIADR3", "sector", "camera", "ccd"], how="left")
-    assert len(merged) == len(frame), "row count changed on detector-position merge"
+    frame_a["TIC"] = frame_a["TIC"].astype(str)
+    merged = frame_a.merge(positions, on=["GAIADR3", "sector", "camera", "ccd"], how="left")
+    assert len(merged) == len(frame_a), "row count changed on detector-position merge"
     missing = int(merged["DETECTOR_X"].isna().sum())
     if missing:
         print(f"dropping {missing} rows without a tess-point solution", flush=True)
@@ -305,9 +314,10 @@ def main():
 
     os.makedirs(DATA_DIR, exist_ok=True)
     merged.to_parquet(OUT_PARQUET)
-    both = (merged.groupby("TIC")["sector"].nunique() >= 2).sum()
+    counts = merged.groupby(["sector", "camera", "ccd"]).size()
     print(f"wrote {OUT_PARQUET}: {len(merged)} rows, {merged['TIC'].nunique()} TICs, "
-          f"{both} observed in both sectors (target {SECTOR_A}, partner {sector_b})", flush=True)
+          f"{len(counts)} chips", flush=True)
+    print(counts.to_string(), flush=True)
 
 
 if __name__ == "__main__":

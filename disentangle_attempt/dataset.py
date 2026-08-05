@@ -1,6 +1,10 @@
 """Cross-sector anchor dataset: masked current sector + other sector + detector peers.
 
-One example is built around an anchor TIC `i` observed in target sector `s`:
+Anchors come from EVERY sector/camera/CCD chip with enough eligible stars; peers are
+always drawn from the anchor's own chip, which is what keeps the cadence grid and the
+detector neighbourhood shared.
+
+One example is built around an anchor TIC `i` observed in sector `s`:
 
   anchor target        raw TGLC aperture flux, TIC i, sector s          [1024]
   current physics view the same curve, with cadences hidden downstream   [1024]
@@ -72,7 +76,8 @@ class CrossSectorPatch:
 
     def __init__(self, parquet_path, target_sector="auto", camera="auto", ccd="auto",
                  curve_length=CURVE_LENGTH, n_peers=N_PEERS, min_valid_fraction=0.5,
-                 split_seed=42, max_eligible_anchors=None, verbose=True):
+                 split_seed=42, max_eligible_anchors=None, min_chip_anchors=64,
+                 verbose=True):
         self.curve_length = int(curve_length)
         self.n_peers = int(n_peers)
 
@@ -114,16 +119,26 @@ class CrossSectorPatch:
         self.det_y = frame["DETECTOR_Y"].astype(float).to_numpy()
         self.n_valid = self.M.sum(axis=1)
         self.min_valid = int(min_valid_fraction * self.curve_length)
+        self.min_chip_anchors = int(min_chip_anchors)
 
         self.rows_by_tic = {}
         for i, t in enumerate(self.tic):
             self.rows_by_tic.setdefault(t, []).append(i)
 
-        self.target = self._choose_target(target_sector, camera, ccd, verbose)
-        self.eligible_rows = self._eligible_rows(self.target)
+        self.chips = self._choose_target(target_sector, camera, ccd, verbose)
+        self.target = self.chips[0]                     # back-compat for single-chip code
+        self.chip_of_row = {}
+        eligible = []
+        for chip in self.chips:
+            rows = self._eligible_rows(chip)
+            eligible.append(rows)
+            for r in rows:
+                self.chip_of_row[int(r)] = chip
+        self.eligible_rows = (np.concatenate(eligible) if eligible
+                              else np.array([], dtype=np.int64))
         if verbose:
-            print(f"target sector/camera/CCD = {self.target}; "
-                  f"{len(self.eligible_rows)} eligible anchors", flush=True)
+            print(f"training over {len(self.chips)} sector/camera/CCD chips; "
+                  f"{len(self.eligible_rows)} eligible anchors total", flush=True)
 
         self._split(split_seed, max_eligible_anchors, verbose)
 
@@ -154,17 +169,26 @@ class CrossSectorPatch:
             for s, c, d in keys]).sort_values("eligible_anchors", ascending=False)
 
     def _choose_target(self, target_sector, camera, ccd, verbose):
+        """Every sector/camera/CCD with enough eligible anchors, not just the best one.
+
+        Peers must share the anchor's chip AND its absolute cadence grid, so a chip is
+        the natural training unit. Training over many chips is what makes the
+        instrument encoder see more than one detector's systematics.
+        """
         table = self.eligibility_table()
         if verbose:
             print("eligible anchors by sector/camera/CCD:\n"
-                  + table.to_string(index=False), flush=True)
+                  + table.head(40).to_string(index=False), flush=True)
         explicit = [v for v in (target_sector, camera, ccd) if v not in ("auto", None)]
         if len(explicit) == 3:
-            return (int(target_sector), int(camera), int(ccd))
+            return [(int(target_sector), int(camera), int(ccd))]
         if len(explicit):
             raise ValueError("set sector, camera and ccd together, or all to 'auto'")
-        best = table.iloc[0]
-        return (int(best["sector"]), int(best["camera"]), int(best["ccd"]))
+        keep = table[table["eligible_anchors"] >= self.min_chip_anchors]
+        if keep.empty:                                  # fall back to the single best
+            keep = table.head(1)
+        return [(int(r["sector"]), int(r["camera"]), int(r["ccd"]))
+                for _, r in keep.iterrows()]
 
     # ------------------------------------------------------------------ splits
     def _split(self, seed, max_eligible_anchors, verbose):
@@ -180,44 +204,64 @@ class CrossSectorPatch:
         assert not (assignment["val"] & assignment["test"]), "val/test TIC overlap"
         self.split_tics = assignment
 
-        group = self._group_rows(self.target)
-        self.split_pool = {}        # every chip row of the split -> peer candidates
-        self.split_anchors = {}     # eligible anchors of the split
+        # One peer pool PER CHIP per split: a peer must share the anchor's chip and
+        # cadence grid, so pools never mix chips.
+        chip_rows = {chip: self._group_rows(chip) for chip in self.chips}
+        self.split_pool = {}        # split -> chip -> candidate rows
+        self.split_anchors = {}     # split -> eligible anchors (all chips)
         for name, members in assignment.items():
-            self.split_pool[name] = np.asarray(
-                [i for i in group if self.tic[i] in members], dtype=np.int64)
-            anchors = np.asarray(
-                [i for i in self.eligible_rows if self.tic[i] in members], dtype=np.int64)
+            pools, anchors = {}, []
+            for chip in self.chips:
+                pool = np.asarray([i for i in chip_rows[chip] if self.tic[i] in members],
+                                  dtype=np.int64)
+                if len(pool) < self.n_peers + 1:
+                    continue                          # too thin in this split, skip chip
+                pools[chip] = pool
+                anchors.extend(i for i in self._eligible_rows(chip)
+                               if self.tic[i] in members)
+            anchors = np.asarray(sorted(anchors), dtype=np.int64)
             if max_eligible_anchors:                 # cap ANCHORS only; peers keep the pool
-                cap = int(round(max_eligible_anchors * len(anchors) / max(len(self.eligible_rows), 1)))
+                cap = int(round(max_eligible_anchors * len(anchors)
+                                / max(len(self.eligible_rows), 1)))
                 if 0 < cap < len(anchors):
                     pick = np.random.default_rng(seed + 1).permutation(len(anchors))[:cap]
                     anchors = np.sort(anchors[pick])
+            self.split_pool[name] = pools
             self.split_anchors[name] = anchors
-            if len(self.split_pool[name]) < self.n_peers + 1:
-                raise RuntimeError(f"split {name} has only {len(self.split_pool[name])} "
-                                   f"chip rows; need {self.n_peers + 1} for peer selection")
+            if not pools:
+                raise RuntimeError(f"split {name} has no chip with "
+                                   f"{self.n_peers + 1} curves for peer selection")
         self.peers = {name: self._peer_table(name) for name in assignment}
         if verbose:
             for name in ("train", "val", "test"):
-                print(f"  {name}: {len(self.split_anchors[name])} anchors "
-                      f"from a {len(self.split_pool[name])}-curve peer pool", flush=True)
+                print(f"  {name}: {len(self.split_anchors[name])} anchors over "
+                      f"{len(self.split_pool[name])} chips", flush=True)
 
     def _peer_table(self, split):
-        """Eight nearest DIFFERENT TICs on the detector, within the split's pool."""
-        anchors, pool = self.split_anchors[split], self.split_pool[split]
+        """Eight nearest DIFFERENT TICs on the detector, within the anchor's own chip."""
+        anchors = self.split_anchors[split]
+        rows_out = np.zeros((len(anchors), self.n_peers), np.int64)
+        dist_out = np.zeros((len(anchors), self.n_peers), np.float32)
         if len(anchors) == 0:
-            return np.zeros((0, self.n_peers), np.int64), np.zeros((0, self.n_peers), np.float32)
-        pool_xy = np.stack([self.det_x[pool], self.det_y[pool]], axis=1)
-        anchor_xy = np.stack([self.det_x[anchors], self.det_y[anchors]], axis=1)
-        distance = np.sqrt(((anchor_xy[:, None, :] - pool_xy[None, :, :]) ** 2).sum(-1))
-        same_tic = self.tic[anchors][:, None] == self.tic[pool][None, :]
-        distance = np.where(same_tic, np.inf, distance)          # never the anchor TIC
-        order = np.argsort(distance, axis=1)[:, :self.n_peers]
-        rows = pool[order]
-        chosen = np.take_along_axis(distance, order, axis=1)
-        assert np.isfinite(chosen).all(), "fewer than n_peers different TICs available"
-        return rows.astype(np.int64), chosen.astype(np.float32)
+            return rows_out, dist_out
+        by_chip = {}
+        for index, anchor in enumerate(anchors):
+            by_chip.setdefault(self.chip_of_row[int(anchor)], []).append(index)
+        for chip, indices in by_chip.items():
+            pool = self.split_pool[split][chip]
+            local = anchors[indices]
+            pool_xy = np.stack([self.det_x[pool], self.det_y[pool]], axis=1)
+            anchor_xy = np.stack([self.det_x[local], self.det_y[local]], axis=1)
+            distance = np.sqrt(((anchor_xy[:, None, :] - pool_xy[None, :, :]) ** 2).sum(-1))
+            same_tic = self.tic[local][:, None] == self.tic[pool][None, :]
+            distance = np.where(same_tic, np.inf, distance)      # never the anchor TIC
+            order = np.argsort(distance, axis=1)[:, :self.n_peers]
+            chosen = np.take_along_axis(distance, order, axis=1)
+            assert np.isfinite(chosen).all(), \
+                f"chip {chip}: fewer than n_peers different TICs available"
+            rows_out[indices] = pool[order]
+            dist_out[indices] = chosen
+        return rows_out.astype(np.int64), dist_out.astype(np.float32)
 
     # -------------------------------------------------------------- accessors
     def other_sector_rows(self, row):
@@ -230,9 +274,12 @@ class CrossSectorPatch:
         raise KeyError(f"TIC {tic} is not an eligible anchor in any split")
 
     def peers_for_row(self, row, split=None):
-        """Eight nearest different-TIC peers for an arbitrary row of the target chip."""
+        """Eight nearest different-TIC peers for an arbitrary row, within its chip."""
         split = split or self.split_of_tic(self.tic[row])
-        pool = self.split_pool[split]
+        chip = self.chip_of_row.get(int(row),
+                                    (int(self.sector[row]), int(self.camera[row]),
+                                     int(self.ccd[row])))
+        pool = self.split_pool[split][chip]
         distance = np.sqrt((self.det_x[pool] - self.det_x[row]) ** 2
                            + (self.det_y[pool] - self.det_y[row]) ** 2)
         distance = np.where(self.tic[pool] == self.tic[row], np.inf, distance)
@@ -241,17 +288,21 @@ class CrossSectorPatch:
         return pool[order], distance[order].astype(np.float32)
 
     def row_for_tic(self, tic):
-        sector = self.target[0]
-        rows = [i for i in self.rows_by_tic[str(tic)] if self.sector[i] == sector]
+        rows = [i for i in self.rows_by_tic[str(tic)] if int(i) in self.chip_of_row]
         if not rows:
-            raise KeyError(f"TIC {tic} has no curve in target sector {sector}")
+            raise KeyError(f"TIC {tic} is not an eligible anchor on any trained chip")
         return int(rows[0])
 
     def random_peer_rows(self, anchor_rows, split, rng):
-        """Random same-sector/camera/CCD peers from the split (branch-use control)."""
-        pool = self.split_pool[split]
+        """Random peers from the anchor's OWN chip (branch-use control).
+
+        Same sector/camera/CCD and cadence grid as the true peers -- only detector
+        proximity differs, which is exactly what the control isolates.
+        """
         out = np.zeros((len(anchor_rows), self.n_peers), dtype=np.int64)
         for k, anchor in enumerate(anchor_rows):
+            chip = self.chip_of_row[int(anchor)]
+            pool = self.split_pool[split][chip]
             candidates = pool[self.tic[pool] != self.tic[anchor]]
             out[k] = rng.choice(candidates, size=self.n_peers, replace=False)
         return out
