@@ -196,11 +196,21 @@ def main():
     def med(a):
         a = np.asarray(a, float); a = a[np.isfinite(a)]
         return float(np.median(a)) if len(a) else None
-    amp_corr = (float(np.corrcoef(amp_star_all, amp_bg_all)[0, 1])
-                if len(amp_star_all) >= 3 else None)
+    amp_s = np.asarray(amp_star_all, float); amp_b = np.asarray(amp_bg_all, float)
+    amp_corr = float(np.corrcoef(amp_s, amp_b)[0, 1]) if len(amp_s) >= 3 else None
+    # per-event coupling SIGN: sign(amp_star * amp_bg) should agree across >=80% of events
+    prod = amp_s * amp_b; prod = prod[np.isfinite(prod) & (prod != 0)]
+    if len(prod):
+        pos_frac = float(np.mean(prod > 0)); dom = float(max(pos_frac, 1 - pos_frac))
+        relationship = "positive" if pos_frac >= 0.5 else "negative"
+    else:
+        dom, relationship = 0.0, "undetermined"
+    sign_consistent = dom >= 0.8
+
     c_same_cadence = med(rf.stellar_bg_corr) is not None and med(rf.stellar_bg_corr) > BG_CORR_MIN \
         and med(np.abs(rf.bg_lag)) <= 2
-    c_amp_corr = amp_corr is not None and amp_corr > 0.3
+    # magnitude of coupling (either sign) >= 0.5 AND a consistent per-event sign
+    c_amp_corr = amp_corr is not None and abs(amp_corr) >= 0.5 and sign_consistent
     c_vs_control = med(rf.stellar_bg_corr) is not None and med(rf.control_bg_corr) is not None \
         and med(rf.stellar_bg_corr) > med(rf.control_bg_corr) + 0.1
     c_spatial = med(rf.near_bg_share) is not None and med(rf.near_bg_share) > 0.5 \
@@ -212,20 +222,25 @@ def main():
                "median_control_bg_corr": med(rf.control_bg_corr),
                "median_abs_bg_lag": med(np.abs(rf.bg_lag)),
                "amp_star_vs_amp_bg_corr": amp_corr,
+               "amp_abs_corr": abs(amp_corr) if amp_corr is not None else None,
+               "amp_relationship": relationship, "amp_sign_consistency": dom,
                "median_nearest_bg_share": med(rf.near_bg_share),
                "median_distant_bg_share": med(rf.dist_bg_share),
                "median_flag_frac_tess": med(rf.flag_frac_tess),
                "median_flag_frac_tglc": med(rf.flag_frac_tglc),
                "criteria": {"background_same_cadence": bool(c_same_cadence),
-                            "amp_correlates_with_background": bool(c_amp_corr),
+                            "amp_correlates_with_background_abs>=0.5_signconsistent": bool(c_amp_corr),
                             "stronger_than_control": bool(c_vs_control),
                             "spatially_coherent": bool(c_spatial)},
-               "consistent_with_scattered_light": consistent}
-    summary["verdict"] = ("CONSISTENT WITH SCATTERED LIGHT: background moves with the stellar event "
-                          "at the same cadence, amplitudes correlate, it beats quiet controls, and it "
-                          "is spatially coherent." if consistent else
-                          "NOT confirmed as scattered light by background: " +
-                          ", ".join(k for k, v in summary["criteria"].items() if not v) + " failed.")
+               "consistent_with_background_systematic": consistent}
+    if consistent:
+        summary["verdict"] = (f"Consistent with a background-driven detector systematic, likely scattered "
+                              f"light ({relationship} amplitude coupling, |r|={abs(amp_corr):.2f}, sign "
+                              f"consistent in {dom * 100:.0f}% of events). NOT claimed as definitive "
+                              f"scattered light: Earth/Moon geometry has not been checked.")
+    else:
+        summary["verdict"] = ("NOT a background-driven systematic by this test: " +
+                              ", ".join(k for k, v in summary["criteria"].items() if not v) + " failed.")
     with open(os.path.join(OUT_DIR, "summary.json"), "w") as fh:
         json.dump(summary, fh, indent=2, default=float)
     print(json.dumps(summary, indent=2, default=float), flush=True)
