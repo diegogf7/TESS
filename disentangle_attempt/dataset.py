@@ -123,7 +123,7 @@ class CrossSectorPatch:
         self.eligible_rows = self._eligible_rows(self.target)
         if verbose:
             print(f"target sector/camera/CCD = {self.target}; "
-                  f"{len(self.eligible_rows)} eligible cross-sector anchors", flush=True)
+                  f"{len(self.eligible_rows)} eligible anchors", flush=True)
 
         self._split(split_seed, max_eligible_anchors, verbose)
 
@@ -134,14 +134,13 @@ class CrossSectorPatch:
                               & (self.ccd == ccd))
 
     def _eligible_rows(self, key):
-        """Rows that (1) have the same TIC in another sector, (2) sit on a chip with
-        >= n_peers other TICs, and (3) have enough valid cadences to mask and score."""
+        """Rows that (1) sit on a chip with >= n_peers other TICs and (2) have enough
+        valid cadences to mask and score. A second sector is NOT required: the model
+        uses one curve per star (the anchor and its masked copy)."""
         rows = self._group_rows(key)
         if len(rows) < self.n_peers + 1:
             return np.array([], dtype=np.int64)
-        keep = [i for i in rows
-                if self.n_valid[i] >= self.min_valid
-                and any(self.sector[j] != key[0] for j in self.rows_by_tic[self.tic[i]])]
+        keep = [i for i in rows if self.n_valid[i] >= self.min_valid]
         return np.asarray(sorted(keep), dtype=np.int64)
 
     def eligibility_table(self):
@@ -151,13 +150,13 @@ class CrossSectorPatch:
         return pd.DataFrame([
             {"sector": s, "camera": c, "ccd": d,
              "curves": len(self._group_rows((s, c, d))),
-             "eligible_tics": len(self._eligible_rows((s, c, d)))}
-            for s, c, d in keys]).sort_values("eligible_tics", ascending=False)
+             "eligible_anchors": len(self._eligible_rows((s, c, d)))}
+            for s, c, d in keys]).sort_values("eligible_anchors", ascending=False)
 
     def _choose_target(self, target_sector, camera, ccd, verbose):
         table = self.eligibility_table()
         if verbose:
-            print("eligible cross-sector TICs by sector/camera/CCD:\n"
+            print("eligible anchors by sector/camera/CCD:\n"
                   + table.to_string(index=False), flush=True)
         explicit = [v for v in (target_sector, camera, ccd) if v not in ("auto", None)]
         if len(explicit) == 3:
@@ -262,7 +261,10 @@ class CrossSectorPatch:
 
 
 class CrossSectorAnchorDataset(Dataset):
-    """One item = one anchor bundle; a batch of 32 gives the step tensors."""
+    """One item = one anchor bundle; a batch of 32 gives the step tensors.
+
+    One curve per star: the anchor is both the target and (after masking) the physics
+    input. No partner sector is loaded."""
 
     def __init__(self, patch, split, seed=0):
         self.patch, self.split = patch, split
@@ -272,7 +274,7 @@ class CrossSectorAnchorDataset(Dataset):
         self.epoch = 0
 
     def set_epoch(self, epoch):
-        """The alternative sector is redrawn each epoch when a TIC has several."""
+        """Kept so the training loop can vary per-epoch sampling."""
         self.epoch = int(epoch)
 
     def __len__(self):
@@ -281,44 +283,31 @@ class CrossSectorAnchorDataset(Dataset):
     def __getitem__(self, index):
         patch = self.patch
         anchor = int(self.anchors[index])
-        others = patch.other_sector_rows(anchor)
-        rng = np.random.default_rng((self.seed, self.epoch, anchor))
-        other = int(others[rng.integers(len(others))])
         peers = self.peer_rows[index]
 
         return {
             "anchor_raw": torch.from_numpy(patch.X[anchor]),
             "anchor_valid_mask": torch.from_numpy(patch.M[anchor]),
-            "other_sector_raw": torch.from_numpy(patch.X[other]),
-            "other_sector_mask": torch.from_numpy(patch.M[other]),
             "peer_raw": torch.from_numpy(patch.X[peers]),
             "peer_mask": torch.from_numpy(patch.M[peers]),
             "anchor_tic_ids": torch.tensor(patch.tic_int[anchor], dtype=torch.int64),
             "anchor_sector": torch.tensor(patch.sector[anchor], dtype=torch.int64),
-            "other_sector": torch.tensor(patch.sector[other], dtype=torch.int64),
             "peer_tic_ids": torch.from_numpy(patch.tic_int[peers]),
             "peer_distances": torch.from_numpy(self.peer_distance[index]),
             "anchor_row": torch.tensor(anchor, dtype=torch.int64),
-            "other_row": torch.tensor(other, dtype=torch.int64),
             "peer_rows": torch.from_numpy(np.asarray(peers, dtype=np.int64)),
         }
 
 
 def audit_batch(patch, batch, verbose=True):
-    """Assert the direct cross-sector contract on a real batch, and print row 0.
+    """Assert the data contract on a real batch, and print row 0.
 
-    physics TIC == anchor TIC, physics sector != anchor sector, peers on the anchor's
-    sector/camera/CCD with different TICs, ordered by detector distance, and no
-    anchor-sector flux anywhere in the physics input.
+    Peers sit on the anchor's sector/camera/CCD with different TICs, ordered by
+    detector distance, and nothing flagged is model-visible.
     """
     anchor_rows = batch["anchor_row"].numpy()
-    other_rows = batch["other_row"].numpy()
     peer_rows = batch["peer_rows"].numpy()
 
-    assert (patch.tic_int[anchor_rows] == patch.tic_int[other_rows]).all(), \
-        "physics curve is a different TIC than the anchor"
-    assert (patch.sector[anchor_rows] != patch.sector[other_rows]).all(), \
-        "physics curve is from the anchor's own sector"
     for k, anchor in enumerate(anchor_rows):
         peers = peer_rows[k]
         assert (patch.sector[peers] == patch.sector[anchor]).all(), "peer sector differs"
@@ -330,31 +319,21 @@ def audit_batch(patch, batch, verbose=True):
     recomputed = np.sqrt((patch.det_x[peer_rows] - patch.det_x[anchor_rows][:, None]) ** 2
                          + (patch.det_y[peer_rows] - patch.det_y[anchor_rows][:, None]) ** 2)
     assert np.allclose(recomputed, distances, atol=1e-4), "stored distances disagree"
+    assert np.allclose(batch["anchor_raw"].numpy(), patch.X[anchor_rows]), \
+        "anchor curve was altered before the model"
 
-    # No anchor-sector flux may enter the physics encoder.
-    physics = batch["other_sector_raw"].numpy()
-    assert np.allclose(physics, patch.X[other_rows]), "physics input is not the other-sector curve"
-    for k, anchor in enumerate(anchor_rows):
-        if patch.n_valid[anchor] > 0:
-            assert not np.array_equal(physics[k], patch.X[anchor]), \
-                "physics input equals the anchor-sector curve"
-    # Quality policy: nothing flagged is model-visible.
-    for name, rows in (("anchor", anchor_rows), ("physics", other_rows),
-                       ("peers", peer_rows.reshape(-1))):
+    for name, rows in (("anchor", anchor_rows), ("peers", peer_rows.reshape(-1))):
         assert not (patch.M[rows] & (patch.F[rows] != 0)).any(), f"{name}: TESS-flagged cadence valid"
         assert not (patch.M[rows] & (patch.G[rows] != 0)).any(), f"{name}: TGLC-flagged cadence valid"
 
     if verbose:
-        a, o = int(anchor_rows[0]), int(other_rows[0])
+        a = int(anchor_rows[0])
         peers = peer_rows[0]
         print("--- audited batch (row 0) ---")
-        print(f"  anchor        TIC {patch.tic[a]}  sector {patch.sector[a]}  "
+        print(f"  anchor TIC {patch.tic[a]}  sector {patch.sector[a]}  "
               f"cam{patch.camera[a]}-ccd{patch.ccd[a]}  "
               f"det ({patch.det_x[a]:.1f}, {patch.det_y[a]:.1f})  valid {patch.n_valid[a]}")
-        print(f"  physics input TIC {patch.tic[o]}  sector {patch.sector[o]}  "
-              f"cam{patch.camera[o]}-ccd{patch.ccd[o]}  valid {patch.n_valid[o]}")
-        print(f"  peers (sector {patch.sector[peers[0]]}, "
-              f"cam{patch.camera[peers[0]]}-ccd{patch.ccd[peers[0]]}), nearest first:")
+        print(f"  peers (same sector/camera/CCD), nearest first:")
         for tic, dist in zip(patch.tic[peers], distances[0]):
             print(f"     TIC {tic:>12s}   distance {dist:8.3f} px")
         print("-----------------------------", flush=True)

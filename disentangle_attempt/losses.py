@@ -1,6 +1,8 @@
-"""Losses: masked reconstruction of the HIDDEN anchor cadences + cross-sector
-global-physics consistency. Nothing else -- no covariance, correction-energy, CBV,
-correlation, adversarial, classification or flow-matching term.
+"""Loss: masked reconstruction of the HIDDEN anchor cadences. That is the whole loss.
+
+The cross-sector consistency term was removed after it measured as useless: swapping in
+a wrong star's partner curve moved the metric by -0.0007 (noise), and it never reached
+the decoder. One curve per star now -- the anchor, and its masked copy.
 
 Scoring only the hidden cadences is what stops the decoder from copying: the physics
 encoder never saw the values it is asked to predict.
@@ -20,30 +22,14 @@ def masked_smooth_l1(prediction, target, mask, beta=1.0):
     return (elementwise * mask).sum() / denom
 
 
-def sector_consistency_loss(current_global_physics, other_sector_global_physics):
-    """1 - cosine between the two L2-normalized global physics vectors.
-
-    Only a GLOBAL quantity is compared: the two sectors' cadences are different
-    absolute times, so nothing is aligned, interpolated or compared per cadence.
-    """
-    cosine = F.cosine_similarity(current_global_physics,
-                                 other_sector_global_physics, dim=-1)
-    return (1.0 - cosine).mean()
-
-
-def total_loss(outputs, anchor_raw, anchor_valid_mask, physics_consistency_weight=0.05,
-               beta=1.0):
+def total_loss(outputs, anchor_raw, anchor_valid_mask, beta=1.0):
     """Averages over all anchors in the step; the caller backwards this once."""
     loss_mask = outputs["hidden_mask"] & anchor_valid_mask
     reconstruction = masked_smooth_l1(outputs["predicted_raw_anchor"], anchor_raw,
                                       loss_mask, beta=beta)
-    consistency = sector_consistency_loss(outputs["current_global_physics"],
-                                          outputs["other_sector_global_physics"])
-    total = reconstruction + physics_consistency_weight * consistency
-    return total, {"reconstruction": float(reconstruction.detach()),
-                   "sector_consistency": float(consistency.detach()),
-                   "total": float(total.detach()),
-                   "n_loss_cadences": int(loss_mask.sum())}
+    return reconstruction, {"reconstruction": float(reconstruction.detach()),
+                            "total": float(reconstruction.detach()),
+                            "n_loss_cadences": int(loss_mask.sum())}
 
 
 @torch.no_grad()

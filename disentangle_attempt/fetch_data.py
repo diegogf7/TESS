@@ -47,6 +47,10 @@ N_STARS = int(os.environ.get("N_STARS", "2000"))
 N_WORKERS = int(os.environ.get("N_WORKERS", "12"))
 MIN_POINTS = int(os.environ.get("MIN_POINTS", "200"))
 CANDIDATE_SECTORS = tuple(range(1, 27))              # TGLC v1 primary mission
+# The model uses ONE curve per star, so the partner-sector download is optional and
+# off by default. Set PARTNER_SECTOR=1 to also fetch the same TICs in a second
+# sector (needed only for cross-sector experiments).
+WANT_PARTNER = os.environ.get("PARTNER_SECTOR", "0") == "1"
 
 BULK = ("https://archive.stsci.edu/hlsps/tglc/download_scripts/"
         "hlsp_tglc_tess_ffi_s{sector:04d}_tess_v1_llc.sh")
@@ -253,6 +257,22 @@ def main():
 
     positions = tess_point_all(frame_a["GAIADR3"].to_numpy(),
                                frame_a["ra"].to_numpy(), frame_a["dec"].to_numpy())
+
+    if not WANT_PARTNER:
+        frame = frame_a.copy()
+        frame["TIC"] = frame["TIC"].astype(str)
+        merged = frame.merge(positions, on=["GAIADR3", "sector", "camera", "ccd"],
+                             how="left")
+        missing = int(merged["DETECTOR_X"].isna().sum())
+        if missing:
+            print(f"dropping {missing} rows without a tess-point solution", flush=True)
+            merged = merged[merged["DETECTOR_X"].notna()].reset_index(drop=True)
+        os.makedirs(DATA_DIR, exist_ok=True)
+        merged.to_parquet(OUT_PARQUET)
+        print(f"wrote {OUT_PARQUET}: {len(merged)} rows, {merged['TIC'].nunique()} TICs "
+              f"(single sector {SECTOR_A}; set PARTNER_SECTOR=1 for cross-sector data)",
+              flush=True)
+        return
 
     # Partner sector: the one re-observing the most of these stars (any camera/CCD).
     counts = (positions[(positions["sector"] != SECTOR_A)

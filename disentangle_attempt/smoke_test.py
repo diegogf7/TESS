@@ -42,17 +42,13 @@ def synthetic_batch(seed=0):
     return {
         "anchor_raw": torch.tensor(rng.normal(size=(B, L)), dtype=torch.float32),
         "anchor_valid_mask": torch.tensor(valid),
-        "other_sector_raw": torch.tensor(rng.normal(size=(B, L)), dtype=torch.float32),
-        "other_sector_mask": torch.tensor(valid),
         "peer_raw": torch.tensor(rng.normal(size=(B, P, L)), dtype=torch.float32),
         "peer_mask": torch.tensor(peer_valid),
         "anchor_tic_ids": torch.arange(B, dtype=torch.int64),
         "anchor_sector": torch.full((B,), 1, dtype=torch.int64),
-        "other_sector": torch.full((B,), 12, dtype=torch.int64),
         "peer_tic_ids": torch.arange(B * P, dtype=torch.int64).reshape(B, P),
         "peer_distances": torch.tensor(rng.random((B, P)), dtype=torch.float32),
         "anchor_row": torch.arange(B, dtype=torch.int64),
-        "other_row": torch.arange(B, dtype=torch.int64),
         "peer_rows": torch.arange(B * P, dtype=torch.int64).reshape(B, P),
     }
 
@@ -75,17 +71,14 @@ def real_batch():
 def check_batch_shapes(batch):
     expected = {
         "anchor_raw": (B, L), "anchor_valid_mask": (B, L),
-        "other_sector_raw": (B, L), "other_sector_mask": (B, L),
         "peer_raw": (B, P, L), "peer_mask": (B, P, L),
-        "anchor_tic_ids": (B,), "anchor_sector": (B,), "other_sector": (B,),
+        "anchor_tic_ids": (B,), "anchor_sector": (B,),
         "peer_tic_ids": (B, P), "peer_distances": (B, P),
     }
     for key, shape in expected.items():
         assert tuple(batch[key].shape) == shape, \
             f"{key}: expected {shape}, got {tuple(batch[key].shape)}"
     assert batch["anchor_valid_mask"].dtype == torch.bool
-    assert (batch["anchor_sector"] != batch["other_sector"]).all(), \
-        "cross-sector view must come from a different sector"
     for row in range(B):
         assert batch["anchor_tic_ids"][row] not in set(batch["peer_tic_ids"][row].tolist()), \
             "a peer must never be the anchor TIC"
@@ -153,8 +146,7 @@ def check_forward_and_gradients(batch, device):
     loss, parts, outputs = forward_batch(model, batch, CONFIG, generator, device=device)
 
     expected = {"predicted_raw_anchor": (B, L), "current_physics_tokens": (B, T, D),
-                "other_sector_physics_tokens": (B, T, D), "current_global_physics": (B, D),
-                "other_sector_global_physics": (B, D), "peer_instrument_tokens": (B, P, T, D),
+                "current_global_physics": (B, D), "peer_instrument_tokens": (B, P, T, D),
                 "instrument_context": (B, P * T * D), "hidden_mask": (B, L),
                 "decoder_input": (B, (P + 1) * T * D)}
     for key, shape in expected.items():
@@ -167,7 +159,7 @@ def check_forward_and_gradients(batch, device):
     assert torch.isfinite(loss) and float(loss.detach()) > 0
     print(f"  forward OK: physics [B,512], instrument [B,4096], decoder in [B,4608] "
           f"out [B,1024] (loss {float(loss.detach()):.4f}, "
-          f"recon {parts['reconstruction']:.4f}, cons {parts['sector_consistency']:.4f})")
+          f"recon {parts['reconstruction']:.4f})")
 
     loss.backward()
     groups = {"physics_s4d": model.physics_encoder, "instrument_s4d": model.instrument_encoder,
@@ -219,7 +211,7 @@ def main():
         batches = [synthetic_batch(s) for s in range(3)]
     else:
         print(f"real patch: sector/camera/ccd {patch.target}, "
-              f"{len(patch.eligible_rows)} eligible cross-sector anchors")
+              f"{len(patch.eligible_rows)} eligible anchors")
         loader = DataLoader(CrossSectorAnchorDataset(patch, "train"), batch_size=B,
                             shuffle=True, drop_last=True)
         iterator = iter(loader)

@@ -32,7 +32,6 @@ max_runtime_minutes: 60
 optimizer: adamw
 learning_rate: 0.0003
 weight_decay: 0.0001
-physics_consistency_weight: 0.05
 gradient_clip: 1.0
 mixed_precision: true      # honoured on CUDA; S4D needs complex FFT, so off elsewhere
 num_workers: 4

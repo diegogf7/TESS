@@ -129,7 +129,7 @@ def plot_history(history_csv, branch_json, path):
         branch = json.load(handle)
     labels = {"shuffle_physics": "physics inputs\nshuffled across TICs",
               "random_peers": "nearest peers ->\nrandom same-chip peers",
-              "wrong_other_sector": "cross-sector curve ->\ndifferent TIC"}
+              }
     names = [n for n in labels if n in branch["conditions"]]
     recon = [branch["conditions"][n]["delta_reconstruction"] for n in names]
     cons = [branch["conditions"][n].get("delta_sector_consistency", 0.0) for n in names]

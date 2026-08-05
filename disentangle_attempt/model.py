@@ -5,8 +5,8 @@ Branch contract (direct cross-sector):
   instrument sees ONLY other TICs on the anchor's sector/camera/CCD/cadence grid;
   decoder    sees the cross-sector physics latent concatenated with the ordered peers.
 
-Neither branch can copy the target: the physics branch has the right star at the wrong
-times, the instrument branch has the right times but the wrong stars.
+The loss is scored only on hidden cadences, so the physics branch cannot copy; the
+instrument branch has the right times but the wrong stars.
 
 Both encoders are the repository's `S4Model` (src/models/s4d.py). That encoder takes
 (B, L, d_input) and its masked token pooling drops missing cadences, so a curve
@@ -93,13 +93,12 @@ class DisentangleModel(nn.Module):
 
     # ------------------------------------------------------------------- forward
     def forward(self, masked_anchor_raw, physics_input_mask, peer_raw, peer_mask,
-                hidden_mask, other_sector_raw=None, other_sector_mask=None):
+                hidden_mask):
         """Masked same-sector physics + detector-peer instrument context.
 
-        The physics encoder sees the anchor's OWN sector with ~25% of its valid
-        cadences hidden, so it carries that star's local timing but cannot copy the
-        withheld values. The cross-sector curve only regularizes the shared physics
-        weights through a pooled global vector; it never reaches the decoder.
+        ONE curve per star: the physics encoder sees the anchor's own sector with ~25%
+        of its valid cadences hidden, so it carries that star's local timing but cannot
+        copy the withheld values it is asked to predict.
         """
         current_physics_tokens = self.encode_physics(masked_anchor_raw, physics_input_mask)
         peer_instrument_tokens, instrument_context = self.encode_peers(peer_raw, peer_mask)
@@ -116,10 +115,6 @@ class DisentangleModel(nn.Module):
             "decoder_input": decoder_input,
             "hidden_mask": hidden_mask,
         }
-        if other_sector_raw is not None:
-            other_tokens = self.encode_physics(other_sector_raw, other_sector_mask)
-            outputs["other_sector_physics_tokens"] = other_tokens
-            outputs["other_sector_global_physics"] = self.global_physics(other_tokens)
         return outputs
 
     def parameter_count(self):

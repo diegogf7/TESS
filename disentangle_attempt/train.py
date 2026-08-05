@@ -80,7 +80,6 @@ def forward_batch(model, batch, config, generator=None, condition=None, patch=No
 
     physics_raw, physics_valid = anchor_raw, anchor_valid
     peer_raw, peer_mask = batch["peer_raw"], batch["peer_mask"]
-    other_raw, other_mask = batch["other_sector_raw"], batch["other_sector_mask"]
 
     if condition == "shuffle_physics":
         roll = torch.roll(torch.arange(len(anchor_raw)), 1)      # another TIC's curve
@@ -89,9 +88,6 @@ def forward_batch(model, batch, config, generator=None, condition=None, patch=No
         rows = patch.random_peer_rows(batch["anchor_row"].numpy(), split, rng)
         peer_raw = torch.from_numpy(patch.X[rows])
         peer_mask = torch.from_numpy(patch.M[rows])
-    elif condition == "wrong_other_sector":
-        roll = torch.roll(torch.arange(len(other_raw)), 1)
-        other_raw, other_mask = other_raw[roll], other_mask[roll]
     elif condition is not None:
         raise ValueError(f"unknown branch-use condition {condition!r}")
 
@@ -102,14 +98,12 @@ def forward_batch(model, batch, config, generator=None, condition=None, patch=No
         masked_physics, physics_visible = masked, visible
 
     tensors = [masked_physics, physics_visible, peer_raw, peer_mask, hidden,
-               other_raw, other_mask, anchor_raw, anchor_valid]
-    (masked_physics, physics_visible, peer_raw, peer_mask, hidden, other_raw,
-     other_mask, anchor_raw, anchor_valid) = [t.to(device) for t in tensors]
+               anchor_raw, anchor_valid]
+    (masked_physics, physics_visible, peer_raw, peer_mask, hidden,
+     anchor_raw, anchor_valid) = [t.to(device) for t in tensors]
 
-    outputs = model(masked_physics, physics_visible, peer_raw, peer_mask, hidden,
-                    other_raw, other_mask)
-    loss, parts = total_loss(outputs, anchor_raw, anchor_valid,
-                             config["physics_consistency_weight"])
+    outputs = model(masked_physics, physics_visible, peer_raw, peer_mask, hidden)
+    loss, parts = total_loss(outputs, anchor_raw, anchor_valid)
     parts["visible_reconstruction"] = visible_reconstruction(outputs, anchor_raw, anchor_valid)
     return loss, parts, outputs
 
@@ -199,8 +193,7 @@ def main():
     history_path = os.path.join(out_dir, "history.csv")
     history_file = open(history_path, "w", newline="")
     writer = csv.writer(history_file)
-    writer.writerow(["epoch", "train_total", "train_reconstruction", "train_sector_consistency",
-                     "val_total", "val_reconstruction", "val_sector_consistency",
+    writer.writerow(["epoch", "train_reconstruction", "val_reconstruction",
                      "val_visible_reconstruction", "seconds", "wall_minutes"])
 
     start = time.time()
@@ -232,22 +225,20 @@ def main():
                                max_steps=config.get("max_val_steps_per_epoch"))
 
         elapsed = time.time() - start
-        writer.writerow([epoch, train_metrics["total"], train_metrics["reconstruction"],
-                         train_metrics["sector_consistency"], val_metrics["total"],
-                         val_metrics["reconstruction"], val_metrics["sector_consistency"],
+        writer.writerow([epoch, train_metrics["reconstruction"],
+                         val_metrics["reconstruction"],
                          val_metrics["visible_reconstruction"],
                          round(time.time() - epoch_start, 2), round(elapsed / 60, 2)])
         history_file.flush()
-        print(f"epoch {epoch}: train recon {train_metrics['reconstruction']:.4f} "
-              f"cons {train_metrics['sector_consistency']:.4f} | val recon "
-              f"{val_metrics['reconstruction']:.4f} cons {val_metrics['sector_consistency']:.4f} "
+        print(f"epoch {epoch}: train recon {train_metrics['reconstruction']:.4f} | "
+              f"val recon {val_metrics['reconstruction']:.4f} "
+              f"(visible {val_metrics['visible_reconstruction']:.4f}) "
               f"| {time.time() - epoch_start:.1f}s", flush=True)
 
         torch.save({"model": model.state_dict(), "config": config, "epoch": epoch},
                    os.path.join(out_dir, "last.pt"))
         if val_metrics["reconstruction"] < best["val_reconstruction"]:
-            best = {"val_reconstruction": val_metrics["reconstruction"], "epoch": epoch,
-                    "val_sector_consistency": val_metrics["sector_consistency"]}
+            best = {"val_reconstruction": val_metrics["reconstruction"], "epoch": epoch}
             since_best = 0
             torch.save({"model": model.state_dict(), "config": config, "epoch": epoch,
                         "target": patch.target}, os.path.join(out_dir, "best.pt"))
@@ -270,27 +261,22 @@ def main():
     baseline = evaluate(model, val_loader, config, device, seed=config["seed"],
                         max_steps=config.get("max_val_steps_per_epoch"))
     branch = {"baseline": baseline, "conditions": {}}
-    for condition in ("shuffle_physics", "random_peers", "wrong_other_sector"):
+    for condition in ("shuffle_physics", "random_peers"):
         scores = evaluate(model, val_loader, config, device, seed=config["seed"],
                           condition=condition, patch=patch, split="val",
                           max_steps=config.get("max_val_steps_per_epoch"))
         branch["conditions"][condition] = {
             "metrics": scores,
             "delta_reconstruction": scores["reconstruction"] - baseline["reconstruction"],
-            "delta_sector_consistency": (scores["sector_consistency"]
-                                         - baseline["sector_consistency"]),
         }
     branch["verdicts"] = {
         "physics_branch_used": bool(branch["conditions"]["shuffle_physics"]["delta_reconstruction"] > 0),
         "instrument_branch_used": bool(branch["conditions"]["random_peers"]["delta_reconstruction"] > 0),
-        "cross_sector_branch_used": bool(
-            branch["conditions"]["wrong_other_sector"]["delta_sector_consistency"] > 0),
     }
     with open(os.path.join(out_dir, "branch_use_tests.json"), "w") as handle:
         json.dump(branch, handle, indent=2)
     for name, result in branch["conditions"].items():
-        print(f"branch-use {name}: d_recon {result['delta_reconstruction']:+.4f} "
-              f"d_consistency {result['delta_sector_consistency']:+.4f}", flush=True)
+        print(f"branch-use {name}: d_recon {result['delta_reconstruction']:+.4f}", flush=True)
 
     # -------------------------------------------------------- quiet reference set
     reference = build_reference_context(patch, split="train", n_peers=config["n_peers"])
@@ -304,7 +290,7 @@ def main():
         "parameters": counts,
         "target_sector_camera_ccd": {"sector": patch.target[0], "camera": patch.target[1],
                                      "ccd": patch.target[2]},
-        "eligible_cross_sector_tics": int(len(patch.eligible_rows)),
+        "eligible_anchors": int(len(patch.eligible_rows)),
         "anchors": {k: int(len(v)) for k, v in patch.split_anchors.items()},
         "peer_pool": {k: int(len(v)) for k, v in patch.split_pool.items()},
         "training_seconds": round(train_seconds, 1),
@@ -312,7 +298,6 @@ def main():
         "stop_reason": stop_reason,
         "best_epoch": best["epoch"],
         "best_val_reconstruction": best["val_reconstruction"],
-        "best_val_sector_consistency": best.get("val_sector_consistency"),
         "test": test_metrics,
         "branch_use_tests": branch,
         "reference_context": reference_meta,
