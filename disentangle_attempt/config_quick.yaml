@@ -1,0 +1,40 @@
+# Quick check of a peer-selection change: ONE chip, 10 epochs, small encoder.
+# Enough to see whether the exclusion radius helps or hurts before spending a
+# 6-hour 80-chip run on it. Same contract and same losses as the full config --
+# only scale and chip scope differ.
+seed: 42
+curve_length: 1024
+anchors_per_step: 32
+n_peers: 8
+peer_min_distance_px: 12.0   # reject peers closer than this on the detector
+n_tokens: 32
+token_dim: 16
+hidden_fraction: 0.25
+mask_style: contiguous_windows
+
+# Pinned chip: Sector 1 camera 4 CCD 2, the one the earlier single-chip runs used,
+# so results are comparable to fast_strict.
+sector: 1
+camera: 4
+ccd: 2
+max_eligible_anchors: null
+min_valid_fraction: 0.5
+min_chip_anchors: 64
+
+d_model: 128
+n_layers: 4
+dropout: 0.0
+
+max_train_steps_per_epoch: 300
+max_val_steps_per_epoch: 20
+max_epochs: 10
+early_stopping_patience: 4
+max_runtime_minutes: 45
+
+optimizer: adamw
+learning_rate: 0.0003
+weight_decay: 0.0001
+gradient_clip: 1.0
+mixed_precision: true
+num_workers: 4
+device: auto
