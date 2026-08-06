@@ -37,6 +37,10 @@ def main():
     parser.add_argument("--scores", required=True)
     parser.add_argument("--parquet", default=None)
     parser.add_argument("--top", type=int, default=10)
+    parser.add_argument("--tics", default=None,
+                        help="comma-separated TICs to plot instead of the top-N")
+    parser.add_argument("--max-instrument", type=float, default=None,
+                        help="keep only candidates below this instrument percentile")
     parser.add_argument("--split", default="test")
     parser.add_argument("--out", default=None)
     parser.add_argument("--require-cross-sector", default="auto",
@@ -44,12 +48,26 @@ def main():
     args = parser.parse_args()
 
     out = args.out or os.path.join(os.path.dirname(os.path.abspath(args.scores)),
-                                   f"top{args.top}_physics_cleaned.png")
+                                   "selected_physics_cleaned.png" if args.tics
+                                   else f"top{args.top}_physics_cleaned.png")
     table = pd.read_csv(args.scores)
     if args.split != "all":
         table = table[table["split"] == args.split]
-    top = table.nlargest(args.top, "physics_nll").reset_index(drop=True)
-    print(f"top {len(top)} physics anomalies in the {args.split} split", flush=True)
+    if args.tics:
+        wanted = [t.strip() for t in args.tics.split(",") if t.strip()]
+        table = table[table["TIC"].astype(str).isin(wanted)]
+        top = table.sort_values("physics_nll", ascending=False).reset_index(drop=True)
+        missing = set(wanted) - set(top["TIC"].astype(str))
+        if missing:
+            print(f"  not found in the scores table: {sorted(missing)}", flush=True)
+        print(f"plotting {len(top)} requested TICs", flush=True)
+    else:
+        if args.max_instrument is not None:
+            table = table[table["instrument_percentile"] < args.max_instrument]
+        top = table.nlargest(args.top, "physics_nll").reset_index(drop=True)
+        print(f"top {len(top)} physics anomalies in the {args.split} split"
+              + (f" with instrument percentile < {args.max_instrument}"
+                 if args.max_instrument is not None else ""), flush=True)
 
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = state["config"]
@@ -114,7 +132,7 @@ def main():
                       f"phy {record['physics_percentile']:.3f}", fontsize=6)
     axes[0].legend(fontsize=8, markerscale=4, loc="upper right")
     axes[-1].set_xlabel("cadence index (gaps = removed cadences)")
-    fig.suptitle(f"top {len(rows)} physics anomalies ({args.split} split), "
+    fig.suptitle(f"{len(rows)} physics candidates ({args.split} split), "
                  "cleaned against each star's own chip reference", fontsize=11)
     fig.tight_layout()
     fig.savefig(out, dpi=120, bbox_inches="tight")
