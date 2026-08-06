@@ -157,7 +157,9 @@ def main():
         args.parquet or config.get("parquet") or DEFAULT_PARQUET,
         target_sector=config.get("sector", "auto"), camera=config.get("camera", "auto"),
         ccd=config.get("ccd", "auto"), curve_length=config["curve_length"],
-        n_peers=config["n_peers"], min_valid_fraction=config.get("min_valid_fraction", 0.5),
+        n_peers=config["n_peers"],
+        peer_min_distance=config.get("peer_min_distance_px", 12.0),
+        min_valid_fraction=config.get("min_valid_fraction", 0.5),
         split_seed=config["seed"], max_eligible_anchors=config.get("max_eligible_anchors"))
     eligibility = patch.eligibility_table()
     eligibility.to_csv(os.path.join(out_dir, "eligibility.csv"), index=False)

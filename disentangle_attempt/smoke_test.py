@@ -59,6 +59,7 @@ def real_batch():
     patch = CrossSectorPatch(PARQUET, target_sector=CONFIG["sector"],
                              camera=CONFIG["camera"], ccd=CONFIG["ccd"],
                              curve_length=L, n_peers=P,
+                             peer_min_distance=CONFIG.get("peer_min_distance_px", 12.0),
                              min_valid_fraction=CONFIG["min_valid_fraction"],
                              split_seed=CONFIG["seed"],
                              max_eligible_anchors=CONFIG["max_eligible_anchors"],

@@ -11,8 +11,8 @@ Selection:
   2. every candidate sits on the same absolute 1024-cadence grid as the target
      (same sector/camera/CCD -- asserted, not assumed);
   3. a seed row supplies a detector location only; its eight nearest different-TIC
-     neighbours form the context, ordered by distance from the seed, and the seed
-     itself is never encoded;
+     neighbours OUTSIDE the peer exclusion radius form the context, ordered by distance
+     from the seed, and the seed itself is never encoded;
   4. every valid cadence is already unflagged (strict zero-flag preprocessing), so no
      flagged cadence can contribute to the score; groups with too few valid cadences
      are rejected;
@@ -83,9 +83,8 @@ def build_reference_context(patch, split="train", n_peers=None, chip=None, verbo
     assert (patch.sector[pool] == sector).all() and (patch.camera[pool] == camera).all() \
         and (patch.ccd[pool] == ccd).all(), "candidate pool is off the target chip"
 
-    xy = np.stack([patch.det_x[pool], patch.det_y[pool]], axis=1)
-    distance = np.sqrt(((xy[:, None, :] - xy[None, :, :]) ** 2).sum(-1))
-    distance[patch.tic[pool][:, None] == patch.tic[pool][None, :]] = np.inf
+    # Same candidate rule as training: different TIC, same chip, outside the radius.
+    distance = patch.candidate_distances(pool, pool)
 
     use_background = bool(np.isfinite(patch.BG[pool]).all() and np.any(patch.BG[pool] != 0))
     best = None

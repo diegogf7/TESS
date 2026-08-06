@@ -4,6 +4,7 @@ seed: 42
 curve_length: 1024
 anchors_per_step: 32
 n_peers: 8
+peer_min_distance_px: 12.0   # reject peers closer than this on the detector
 n_tokens: 32
 token_dim: 16
 hidden_fraction: 0.25

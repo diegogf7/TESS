@@ -40,6 +40,11 @@ from disentangle_attempt.preprocess import (flag_removal_report, grid_values,
 
 CURVE_LENGTH = 1024
 N_PEERS = 8
+# Peers closer than this on the detector are rejected outright: a very close neighbour
+# can share the anchor's PSF wings, so its "instrument" curve carries the anchor's own
+# flux and the branch could reconstruct the target from a blend rather than from shared
+# measurement conditions.
+PEER_MIN_DISTANCE_PX = 12.0
 
 
 # ------------------------------------------------------------------ cadence grid
@@ -77,7 +82,8 @@ class CrossSectorPatch:
     def __init__(self, parquet_path, target_sector="auto", camera="auto", ccd="auto",
                  curve_length=CURVE_LENGTH, n_peers=N_PEERS, min_valid_fraction=0.5,
                  split_seed=42, max_eligible_anchors=None, min_chip_anchors=64,
-                 require_cross_sector=False, verbose=True):
+                 require_cross_sector=False, peer_min_distance=PEER_MIN_DISTANCE_PX,
+                 verbose=True):
         self.curve_length = int(curve_length)
         self.n_peers = int(n_peers)
 
@@ -124,11 +130,14 @@ class CrossSectorPatch:
         # sector. Needed to rebuild the exact TIC split an older checkpoint trained
         # with -- otherwise its test stars are not the ones it was held out from.
         self.require_cross_sector = bool(require_cross_sector)
+        self.peer_min_distance = float(peer_min_distance)
+        self.peer_stats = {}
 
         self.rows_by_tic = {}
         for i, t in enumerate(self.tic):
             self.rows_by_tic.setdefault(t, []).append(i)
 
+        self.eligible_before_radius = self._count_eligible_ignoring_radius()
         self.chips = self._choose_target(target_sector, camera, ccd, verbose)
         self.target = self.chips[0]                     # back-compat for single-chip code
         self.chip_of_row = {}
@@ -152,6 +161,47 @@ class CrossSectorPatch:
         return np.flatnonzero((self.sector == sector) & (self.camera == camera)
                               & (self.ccd == ccd))
 
+    def _count_eligible_ignoring_radius(self):
+        """Anchors that would qualify under the old nearest-neighbour rule."""
+        total = 0
+        for key in {(int(a), int(b), int(c))
+                    for a, b, c in zip(self.sector, self.camera, self.ccd)}:
+            rows = self._group_rows(key)
+            if len(rows) < self.n_peers + 1:
+                continue
+            keep = [i for i in rows if self.n_valid[i] >= self.min_valid]
+            if self.require_cross_sector:
+                keep = [i for i in keep
+                        if any(self.sector[j] != key[0]
+                               for j in self.rows_by_tic[self.tic[i]])]
+            total += len(keep)
+        return total
+
+    def candidate_distances(self, anchor_rows, pool):
+        """[len(anchor_rows), len(pool)] distances, inf where a candidate is rejected.
+
+        Rejected: the anchor's own TIC, anything inside the exclusion radius, and any
+        row without finite detector coordinates.
+        """
+        anchor_rows = np.atleast_1d(np.asarray(anchor_rows, dtype=np.int64))
+        anchor_xy = np.stack([self.det_x[anchor_rows], self.det_y[anchor_rows]], axis=1)
+        pool_xy = np.stack([self.det_x[pool], self.det_y[pool]], axis=1)
+        distance = np.sqrt(((anchor_xy[:, None, :] - pool_xy[None, :, :]) ** 2).sum(-1))
+        distance = np.where(self.tic[anchor_rows][:, None] == self.tic[pool][None, :],
+                            np.inf, distance)
+        distance = np.where(np.isfinite(distance), distance, np.inf)
+        finite_xy = np.isfinite(self.det_x[pool]) & np.isfinite(self.det_y[pool])
+        distance = np.where(finite_xy[None, :], distance, np.inf)
+        return np.where(distance < self.peer_min_distance, np.inf, distance)
+
+    def _select_peers(self, anchor_rows, pool):
+        """Eight nearest candidates OUTSIDE the radius, nearest first, plus a keep mask."""
+        distance = self.candidate_distances(anchor_rows, pool)
+        order = np.argsort(distance, axis=1)[:, :self.n_peers]
+        chosen = np.take_along_axis(distance, order, axis=1)
+        keep = np.isfinite(chosen).all(axis=1)          # fewer than 8 -> ineligible
+        return pool[order], chosen.astype(np.float32), keep
+
     def _eligible_rows(self, key):
         """Rows that (1) sit on a chip with >= n_peers other TICs and (2) have enough
         valid cadences to mask and score. A second sector is NOT required: the model
@@ -163,7 +213,12 @@ class CrossSectorPatch:
         if self.require_cross_sector:
             keep = [i for i in keep
                     if any(self.sector[j] != key[0] for j in self.rows_by_tic[self.tic[i]])]
-        return np.asarray(sorted(keep), dtype=np.int64)
+        if not keep:
+            return np.array([], dtype=np.int64)
+        # An anchor must have n_peers candidates outside the radius on its own chip.
+        keep = np.asarray(sorted(keep), dtype=np.int64)
+        usable = np.isfinite(self.candidate_distances(keep, rows)).sum(axis=1) >= self.n_peers
+        return keep[usable]
 
     def eligibility_table(self):
         """Eligible-anchor counts per sector/camera/CCD (printed before training)."""
@@ -217,15 +272,21 @@ class CrossSectorPatch:
         self.split_pool = {}        # split -> chip -> candidate rows
         self.split_anchors = {}     # split -> eligible anchors (all chips)
         for name, members in assignment.items():
-            pools, anchors = {}, []
+            pools, anchors, dropped_for_radius = {}, [], 0
             for chip in self.chips:
                 pool = np.asarray([i for i in chip_rows[chip] if self.tic[i] in members],
                                   dtype=np.int64)
                 if len(pool) < self.n_peers + 1:
                     continue                          # too thin in this split, skip chip
                 pools[chip] = pool
-                anchors.extend(i for i in self._eligible_rows(chip)
-                               if self.tic[i] in members)
+                chip_anchors = np.asarray(
+                    [i for i in self._eligible_rows(chip) if self.tic[i] in members],
+                    dtype=np.int64)
+                if len(chip_anchors):
+                    _, _, keep = self._select_peers(chip_anchors, pool)
+                    dropped_here = int((~keep).sum())
+                    dropped_for_radius += dropped_here
+                    anchors.extend(int(a) for a in chip_anchors[keep])
             anchors = np.asarray(sorted(anchors), dtype=np.int64)
             if max_eligible_anchors:                 # cap ANCHORS only; peers keep the pool
                 cap = int(round(max_eligible_anchors * len(anchors)
@@ -235,17 +296,53 @@ class CrossSectorPatch:
                     anchors = np.sort(anchors[pick])
             self.split_pool[name] = pools
             self.split_anchors[name] = anchors
+            self.peer_stats[name] = {"dropped_no_valid_group": dropped_for_radius}
             if not pools:
                 raise RuntimeError(f"split {name} has no chip with "
                                    f"{self.n_peers + 1} curves for peer selection")
         self.peers = {name: self._peer_table(name) for name in assignment}
         if verbose:
-            for name in ("train", "val", "test"):
-                print(f"  {name}: {len(self.split_anchors[name])} anchors over "
-                      f"{len(self.split_pool[name])} chips", flush=True)
+            self.report_peer_selection()
+
+    def report_peer_selection(self):
+        """What the exclusion radius cost, and what the surviving groups look like."""
+        after = sum(len(v) for v in self.split_anchors.values())
+        before = self.eligible_before_radius
+        removed = (100.0 * (before - after) / before) if before else 0.0
+        dropped = sum(v.get("dropped_no_valid_group", 0) for v in self.peer_stats.values())
+        print(f"peer exclusion radius: {self.peer_min_distance:.1f} px", flush=True)
+        print(f"  eligible anchors {before} -> {after} ({removed:.1f}% removed); "
+              f"{dropped} rejected for fewer than {self.n_peers} peers outside the radius",
+              flush=True)
+        for name in ("train", "val", "test"):
+            distances = self.peers[name][1]
+            if not len(distances):
+                continue
+            print(f"  {name}: {len(self.split_anchors[name])} anchors over "
+                  f"{len(self.split_pool[name])} chips | selected peer distance "
+                  f"median {np.median(distances):.2f} px, min {distances.min():.2f}, "
+                  f"max {distances.max():.2f}", flush=True)
+
+    def assert_peer_group(self, anchor, peer_rows, distances):
+        """Every contract the peer rule promises, checked on one group."""
+        anchor = int(anchor)
+        peer_rows = np.asarray(peer_rows, dtype=np.int64)
+        distances = np.asarray(distances, dtype=float)
+        assert len(peer_rows) == self.n_peers == len(distances), "group is not n_peers"
+        assert (distances >= self.peer_min_distance - 1e-6).all(), \
+            f"a peer is inside the {self.peer_min_distance} px exclusion radius"
+        assert (np.diff(distances) >= -1e-6).all(), "peers are not nearest-to-farthest"
+        assert (self.tic[peer_rows] != self.tic[anchor]).all(), "a peer is the anchor TIC"
+        assert (self.sector[peer_rows] == self.sector[anchor]).all(), "peer sector differs"
+        assert (self.camera[peer_rows] == self.camera[anchor]).all(), "peer camera differs"
+        assert (self.ccd[peer_rows] == self.ccd[anchor]).all(), "peer CCD differs"
+        recomputed = np.sqrt((self.det_x[peer_rows] - self.det_x[anchor]) ** 2
+                             + (self.det_y[peer_rows] - self.det_y[anchor]) ** 2)
+        assert np.allclose(recomputed, distances, atol=1e-4), "distances disagree"
+        return True
 
     def _peer_table(self, split):
-        """Eight nearest DIFFERENT TICs on the detector, within the anchor's own chip."""
+        """Eight nearest DIFFERENT TICs outside the exclusion radius, own chip only."""
         anchors = self.split_anchors[split]
         rows_out = np.zeros((len(anchors), self.n_peers), np.int64)
         dist_out = np.zeros((len(anchors), self.n_peers), np.float32)
@@ -256,18 +353,13 @@ class CrossSectorPatch:
             by_chip.setdefault(self.chip_of_row[int(anchor)], []).append(index)
         for chip, indices in by_chip.items():
             pool = self.split_pool[split][chip]
-            local = anchors[indices]
-            pool_xy = np.stack([self.det_x[pool], self.det_y[pool]], axis=1)
-            anchor_xy = np.stack([self.det_x[local], self.det_y[local]], axis=1)
-            distance = np.sqrt(((anchor_xy[:, None, :] - pool_xy[None, :, :]) ** 2).sum(-1))
-            same_tic = self.tic[local][:, None] == self.tic[pool][None, :]
-            distance = np.where(same_tic, np.inf, distance)      # never the anchor TIC
-            order = np.argsort(distance, axis=1)[:, :self.n_peers]
-            chosen = np.take_along_axis(distance, order, axis=1)
-            assert np.isfinite(chosen).all(), \
-                f"chip {chip}: fewer than n_peers different TICs available"
-            rows_out[indices] = pool[order]
+            rows, chosen, keep = self._select_peers(anchors[indices], pool)
+            assert keep.all(), f"chip {chip}: an anchor kept without a full peer group"
+            rows_out[indices] = rows
             dist_out[indices] = chosen
+        assert (dist_out >= self.peer_min_distance - 1e-6).all(), \
+            "a selected peer is inside the exclusion radius"
+        assert (np.diff(dist_out, axis=1) >= -1e-6).all(), "peers are not distance-ordered"
         return rows_out.astype(np.int64), dist_out.astype(np.float32)
 
     # -------------------------------------------------------------- accessors
@@ -281,18 +373,16 @@ class CrossSectorPatch:
         raise KeyError(f"TIC {tic} is not an eligible anchor in any split")
 
     def peers_for_row(self, row, split=None):
-        """Eight nearest different-TIC peers for an arbitrary row, within its chip."""
+        """Eight nearest different-TIC peers outside the radius, within its chip."""
         split = split or self.split_of_tic(self.tic[row])
         chip = self.chip_of_row.get(int(row),
                                     (int(self.sector[row]), int(self.camera[row]),
                                      int(self.ccd[row])))
         pool = self.split_pool[split][chip]
-        distance = np.sqrt((self.det_x[pool] - self.det_x[row]) ** 2
-                           + (self.det_y[pool] - self.det_y[row]) ** 2)
-        distance = np.where(self.tic[pool] == self.tic[row], np.inf, distance)
-        order = np.argsort(distance)[:self.n_peers]
-        assert np.isfinite(distance[order]).all(), "fewer than n_peers different TICs"
-        return pool[order], distance[order].astype(np.float32)
+        rows, chosen, keep = self._select_peers(np.asarray([int(row)]), pool)
+        assert keep[0], (f"row {row}: fewer than {self.n_peers} peers outside "
+                         f"{self.peer_min_distance} px")
+        return rows[0], chosen[0]
 
     def row_for_tic(self, tic):
         rows = [i for i in self.rows_by_tic[str(tic)] if int(i) in self.chip_of_row]
@@ -310,8 +400,11 @@ class CrossSectorPatch:
         for k, anchor in enumerate(anchor_rows):
             chip = self.chip_of_row[int(anchor)]
             pool = self.split_pool[split][chip]
-            candidates = pool[self.tic[pool] != self.tic[anchor]]
-            out[k] = rng.choice(candidates, size=self.n_peers, replace=False)
+            # Same candidate pool as the real peers -- radius included -- so the control
+            # differs only in proximity, not in which stars are admissible.
+            allowed = pool[np.isfinite(
+                self.candidate_distances(np.asarray([int(anchor)]), pool)[0])]
+            out[k] = rng.choice(allowed, size=self.n_peers, replace=False)
         return out
 
     def curves(self, rows):
@@ -397,17 +490,9 @@ def audit_batch(patch, batch, verbose=True):
     anchor_rows = batch["anchor_row"].numpy()
     peer_rows = batch["peer_rows"].numpy()
 
-    for k, anchor in enumerate(anchor_rows):
-        peers = peer_rows[k]
-        assert (patch.sector[peers] == patch.sector[anchor]).all(), "peer sector differs"
-        assert (patch.camera[peers] == patch.camera[anchor]).all(), "peer camera differs"
-        assert (patch.ccd[peers] == patch.ccd[anchor]).all(), "peer CCD differs"
-        assert (patch.tic_int[peers] != patch.tic_int[anchor]).all(), "a peer is the anchor TIC"
     distances = batch["peer_distances"].numpy()
-    assert (np.diff(distances, axis=1) >= -1e-6).all(), "peers are not distance-ordered"
-    recomputed = np.sqrt((patch.det_x[peer_rows] - patch.det_x[anchor_rows][:, None]) ** 2
-                         + (patch.det_y[peer_rows] - patch.det_y[anchor_rows][:, None]) ** 2)
-    assert np.allclose(recomputed, distances, atol=1e-4), "stored distances disagree"
+    for k, anchor in enumerate(anchor_rows):
+        patch.assert_peer_group(anchor, peer_rows[k], distances[k])
     assert np.allclose(batch["anchor_raw"].numpy(), patch.X[anchor_rows]), \
         "anchor curve was altered before the model"
 
@@ -422,9 +507,11 @@ def audit_batch(patch, batch, verbose=True):
         print(f"  anchor TIC {patch.tic[a]}  sector {patch.sector[a]}  "
               f"cam{patch.camera[a]}-ccd{patch.ccd[a]}  "
               f"det ({patch.det_x[a]:.1f}, {patch.det_y[a]:.1f})  valid {patch.n_valid[a]}")
-        print(f"  peers (same sector/camera/CCD), nearest first:")
-        for tic, dist in zip(patch.tic[peers], distances[0]):
-            print(f"     TIC {tic:>12s}   distance {dist:8.3f} px")
+        print(f"  peers (same sector/camera/CCD, all >= "
+              f"{patch.peer_min_distance:.1f} px), nearest first:")
+        for row, dist in zip(peers, distances[0]):
+            print(f"     TIC {patch.tic[row]:>12s}  det ({patch.det_x[row]:7.1f}, "
+                  f"{patch.det_y[row]:7.1f})  distance {dist:8.3f} px")
         print("-----------------------------", flush=True)
     return True
 
