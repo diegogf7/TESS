@@ -137,8 +137,8 @@ class CrossSectorPatch:
         for i, t in enumerate(self.tic):
             self.rows_by_tic.setdefault(t, []).append(i)
 
-        self.eligible_before_radius = self._count_eligible_ignoring_radius()
         self.chips = self._choose_target(target_sector, camera, ccd, verbose)
+        self.eligible_before_radius = self._count_eligible_ignoring_radius(self.chips)
         self.target = self.chips[0]                     # back-compat for single-chip code
         self.chip_of_row = {}
         eligible = []
@@ -161,11 +161,16 @@ class CrossSectorPatch:
         return np.flatnonzero((self.sector == sector) & (self.camera == camera)
                               & (self.ccd == ccd))
 
-    def _count_eligible_ignoring_radius(self):
-        """Anchors that would qualify under the old nearest-neighbour rule."""
+    def _count_eligible_ignoring_radius(self, chips=None):
+        """Anchors that would qualify under the old nearest-neighbour rule.
+
+        Counted over the SAME chips that end up trained on, so the comparison isolates
+        the radius rather than also counting chips the run never touches.
+        """
         total = 0
-        for key in {(int(a), int(b), int(c))
-                    for a, b, c in zip(self.sector, self.camera, self.ccd)}:
+        for key in (chips if chips is not None
+                    else {(int(a), int(b), int(c))
+                          for a, b, c in zip(self.sector, self.camera, self.ccd)}):
             rows = self._group_rows(key)
             if len(rows) < self.n_peers + 1:
                 continue
