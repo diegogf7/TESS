@@ -171,8 +171,10 @@ def main():
         rows, peer_rows = rows[pick], peer_rows[pick]
         splits = [splits[i] for i in pick]
     assert len(np.unique(rows)) == len(rows), "anchors must be unique"
-    print(f"{len(rows)} unique anchors on sector {patch.target[0]} "
-          f"cam{patch.target[1]}-ccd{patch.target[2]}", flush=True)
+    chips = sorted({(int(patch.sector[r]), int(patch.camera[r]), int(patch.ccd[r]))
+                    for r in rows})
+    print(f"{len(rows)} unique anchors over {len(chips)} sector/camera/CCD chips "
+          f"(e.g. {chips[0]})", flush=True)
 
     # Strict flag policy holds for every curve that reaches the encoders.
     for name, check in (("anchors", rows), ("peers", peer_rows.reshape(-1))):
