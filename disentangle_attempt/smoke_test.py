@@ -139,6 +139,31 @@ def check_masking(batch):
           f"{float(runs):.1f} windows/row, 4 complementary masks tile the curve)")
 
 
+def check_correction_identity(patch, device):
+    """Identical instrument contexts must cancel: correction ~ 0, cleaned ~ raw.
+
+    Guards the equation itself. If the caller ever reverts to raw - pred_reference,
+    this fires, because that difference is the decoder's reconstruction error and does
+    not vanish when the two contexts are the same.
+    """
+    from disentangle_attempt.infer import identity_correction_check
+    from disentangle_attempt.masking import complementary_masks
+    model = DisentangleModel(d_model=CONFIG["d_model"], n_layers=CONFIG["n_layers"],
+                             dropout=0.0, n_peers=P, n_tokens=T, token_dim=D,
+                             curve_length=L).to(device)
+    model.eval()
+    row = int(patch.split_anchors["train"][0])
+    peers = patch.peers_for_row(row, "train")[0]
+    largest = identity_correction_check(
+        model, torch.from_numpy(patch.X[row]).unsqueeze(0),
+        torch.from_numpy(patch.M[row]).unsqueeze(0),
+        torch.from_numpy(patch.X[peers]).unsqueeze(0),
+        torch.from_numpy(patch.M[peers]).unsqueeze(0),
+        complementary_masks(L, n_masks=4), device)
+    assert largest < 1e-5, f"identical contexts gave |correction| {largest:.3e}"
+    print(f"  identity check OK: max |correction| {largest:.3e} with identical contexts")
+
+
 def check_forward_and_gradients(batch, device):
     model = DisentangleModel(d_model=CONFIG["d_model"], n_layers=CONFIG["n_layers"],
                              dropout=0.0, n_peers=P, n_tokens=T, token_dim=D,
@@ -229,6 +254,9 @@ def main():
     check_masking(batch)
     print("[4/5] forward and gradient flow")
     check_forward_and_gradients(batch, device)
+    if patch is not None:
+        print("[4b/5] inference identity check")
+        check_correction_identity(patch, device)
     print(f"[5/5] tiny overfit on {len(batches)} steps")
     tiny_overfit(batches, device)
     print("\nALL SMOKE TESTS PASSED")

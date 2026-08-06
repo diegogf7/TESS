@@ -62,16 +62,19 @@ def main():
     peers = np.stack([patch.peers_for_row(r, "test")[0] for r in rows])
     raw = torch.from_numpy(patch.X[rows])
     valid = torch.from_numpy(patch.M[rows])
-    _, cleaned, _, _, _ = dual_context_prediction(
+    actual_pred, reference_pred, _, _, _ = dual_context_prediction(
         model, raw, valid,
         torch.from_numpy(patch.X[peers]), torch.from_numpy(patch.M[peers]),
         quiet["peer_raw"].unsqueeze(0).expand(len(rows), -1, -1),
         quiet["peer_mask"].unsqueeze(0).expand(len(rows), -1, -1), masks, device)
+    # correction = pred_actual - pred_reference; cleaned = raw - correction.
+    correction = (actual_pred - reference_pred).numpy()
 
     hidden = masks[args.mask_index].numpy()
     fig, axes = plt.subplots(len(rows), 1, figsize=(11, 2.2 * len(rows)), sharex=True)
     axes = np.atleast_1d(axes)
-    for ax, row, curve in zip(axes, rows, cleaned):
+    for k, (ax, row) in enumerate(zip(axes, rows)):
+        curve = patch.X[row] - correction[k]
         keep = patch.M[row]
         x = np.arange(len(keep))
         # Both series exist at EVERY valid cadence; the encoder input is the anchor
@@ -81,8 +84,8 @@ def main():
                    label="anchor / raw target (all valid cadences)")
         ax.scatter(x[keep], encoder_input[keep], s=2.0, color="tab:orange", linewidths=0,
                    label=f"physics encoder input (mask {args.mask_index}: hidden -> 0)")
-        ax.scatter(x[keep], curve.numpy()[keep], s=2.0, color="tab:blue", linewidths=0,
-                   label="cleaned")
+        ax.scatter(x[keep], curve[keep], s=2.0, color="tab:blue", linewidths=0,
+                   label="cleaned = raw - correction")
         ax.set_ylabel(f"TIC {patch.tic[row]}", fontsize=7)
     axes[0].legend(loc="upper right", fontsize=7, ncol=3, markerscale=4)
     axes[-1].set_xlabel("cadence index")

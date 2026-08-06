@@ -8,9 +8,13 @@ reference peers:
     correction = pred_actual - pred_reference
     cleaned    = raw_anchor - correction
 
-The correction is the decoder's estimate of what the actual detector neighbourhood
-adds relative to a quiet one. The cleaned curve is a counterfactual, NOT proven ground
-truth and NOT a measured correction.
+pred_reference is NOT the cleaned curve: it carries the decoder's reconstruction error
+too, so subtracting it from raw would attribute that error to the instrument. Only the
+DIFFERENCE between the two decoder passes isolates what the actual neighbourhood adds
+relative to a quiet one.
+
+The cleaned curve is a counterfactual, NOT proven ground truth and NOT a measured
+correction.
 
     python -m disentangle_attempt.infer \
       --checkpoint disentangle_attempt/outputs/<run_name>/best.pt --tic-id <TIC_ID>
@@ -39,11 +43,23 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # ------------------------------------------------------------------- prediction
 @torch.no_grad()
 def dual_context_prediction(model, raw, valid, actual_peers, actual_peer_mask,
-                            quiet_peers, quiet_peer_mask, masks, device, stitch=True):
+                            reference_peers, reference_peer_mask, masks, device,
+                            stitch=True):
     """Predictions under both instrument contexts, sharing one physics pass per mask.
 
-    raw/valid [B, L]; peers [B, P, L]; masks [K, L]. Returns actual [B, L],
-    cleaned [B, L], physics tokens [B, K, T, D] and both peer token sets.
+    Returns the TWO DECODER PREDICTIONS, not a cleaned curve:
+
+        actual_prediction    decoded with the target's real nearest peers
+        reference_prediction decoded with the quiet reference peers
+
+    The caller forms
+        correction = actual_prediction - reference_prediction
+        cleaned    = raw - correction
+    Treating reference_prediction as the cleaned curve is wrong: it also carries the
+    decoder's reconstruction error and whatever stellar detail the physics latent
+    failed to encode, and both would land in the "correction".
+
+    raw/valid [B, L]; peers [B, P, L]; masks [K, L].
 
     stitch=True keeps only each mask's hidden block, so every cadence was predicted
     while invisible to the physics encoder.
@@ -54,26 +70,40 @@ def dual_context_prediction(model, raw, valid, actual_peers, actual_peer_mask,
     raw, valid = raw.to(device), valid.to(device)
     actual_tokens, actual_context = model.encode_peers(actual_peers.to(device),
                                                        actual_peer_mask.to(device))
-    quiet_tokens, quiet_context = model.encode_peers(quiet_peers.to(device),
-                                                     quiet_peer_mask.to(device))
+    reference_tokens, reference_context = model.encode_peers(
+        reference_peers.to(device), reference_peer_mask.to(device))
 
     actual_prediction = torch.zeros(B, L, device=device)
-    cleaned_prediction = torch.zeros(B, L, device=device)
+    reference_prediction = torch.zeros(B, L, device=device)
     physics_tokens = []
     for k in range(masks.shape[0]):
         hidden = masks[k].to(device).unsqueeze(0).expand(B, L)
         tokens = model.encode_physics(raw.masked_fill(hidden, 0.0), valid & ~hidden)
         latent = tokens.flatten(1)
         with_actual = model.decoder(torch.cat([latent, actual_context], dim=-1))
-        with_quiet = model.decoder(torch.cat([latent, quiet_context], dim=-1))
+        with_reference = model.decoder(torch.cat([latent, reference_context], dim=-1))
         if stitch:
             actual_prediction[:, masks[k]] = with_actual[:, masks[k]]
-            cleaned_prediction[:, masks[k]] = with_quiet[:, masks[k]]
+            reference_prediction[:, masks[k]] = with_reference[:, masks[k]]
         else:
-            actual_prediction, cleaned_prediction = with_actual, with_quiet
+            actual_prediction, reference_prediction = with_actual, with_reference
         physics_tokens.append(tokens)
-    return (actual_prediction.cpu(), cleaned_prediction.cpu(),
-            torch.stack(physics_tokens, dim=1).cpu(), actual_tokens.cpu(), quiet_tokens.cpu())
+    return (actual_prediction.cpu(), reference_prediction.cpu(),
+            torch.stack(physics_tokens, dim=1).cpu(), actual_tokens.cpu(),
+            reference_tokens.cpu())
+
+
+@torch.no_grad()
+def identity_correction_check(model, raw, valid, peers, peer_mask, masks, device):
+    """Identical contexts must cancel: correction ~ 0, cleaned ~ raw.
+
+    Anything above numerical noise here means the two decoder passes are not being
+    differenced, which is exactly the bug this guards.
+    """
+    actual, reference, _, _, _ = dual_context_prediction(
+        model, raw, valid, peers, peer_mask, peers, peer_mask, masks, device)
+    correction = (actual - reference).numpy()
+    return float(np.abs(correction[valid.numpy()]).max())
 
 
 # ------------------------------------------------------------------------ plots
@@ -84,7 +114,7 @@ def plot_correction(cadence_ids, raw, reconstructed, cleaned, correction, valid,
     x = np.arange(len(raw))
     axes[0].scatter(x[valid], raw[valid], s=2, color="0.55", linewidths=0, label="raw anchor")
     axes[0].scatter(x[valid], reconstructed[valid], s=2, color="tab:green", linewidths=0,
-                    label="reconstructed (actual peers)")
+                    label="pred_actual (actual peers)")
     axes[0].set_ylabel("normalized flux")
     axes[0].legend(loc="upper right", fontsize=8, markerscale=4)
     axes[0].set_title(title, fontsize=10)
@@ -191,33 +221,53 @@ def main():
 
     raw = torch.from_numpy(patch.X[row]).unsqueeze(0)
     valid = torch.from_numpy(patch.M[row]).unsqueeze(0)
-    actual, cleaned, physics_tokens, actual_tokens, quiet_tokens = dual_context_prediction(
+    actual_pred, reference_pred, physics_tokens, actual_tokens, reference_tokens = dual_context_prediction(
         model, raw, valid,
         torch.from_numpy(patch.X[peer_rows]).unsqueeze(0),
         torch.from_numpy(patch.M[peer_rows]).unsqueeze(0),
         quiet["peer_raw"].unsqueeze(0), quiet["peer_mask"].unsqueeze(0), masks, device)
 
     raw_np = patch.X[row]
-    cleaned_np = cleaned[0].numpy()
-    correction = raw_np - cleaned_np
+    actual_np = actual_pred[0].numpy()
+    reference_np = reference_pred[0].numpy()
+    # The correction is the DIFFERENCE BETWEEN THE TWO DECODER PASSES -- what the actual
+    # neighbourhood adds relative to a quiet one. Using raw - reference instead would
+    # fold the decoder's reconstruction error into the correction.
+    correction = actual_np - reference_np
+    cleaned_np = raw_np - correction
     output_mask = patch.M[row]
     cadence_ids = patch.grids[sector]
+
+    valid = patch.M[row]
+    assert np.allclose(correction[valid], (actual_np - reference_np)[valid], atol=1e-6)
+    assert np.allclose(cleaned_np[valid], (raw_np - correction)[valid], atol=1e-6)
+
+    identity_max = identity_correction_check(
+        model, torch.from_numpy(patch.X[row]).unsqueeze(0),
+        torch.from_numpy(patch.M[row]).unsqueeze(0),
+        torch.from_numpy(patch.X[peer_rows]).unsqueeze(0),
+        torch.from_numpy(patch.M[peer_rows]).unsqueeze(0), masks, device)
+    assert identity_max < 1e-5, \
+        f"identical contexts gave a correction of {identity_max:.3e}, expected ~0"
+    print(f"identity check (actual peers == reference peers): max |correction| "
+          f"{identity_max:.3e}", flush=True)
 
     np.savez(
         os.path.join(out_dir, "inference_arrays.npz"),
         tic_id=np.int64(patch.tic_int[row]), sector=np.int64(sector),
         camera=np.int64(patch.target[1]), ccd=np.int64(patch.target[2]),
         cadence_ids=cadence_ids, raw_target=raw_np, target_valid_mask=output_mask,
-        actual_context_prediction=actual[0].numpy(),
-        cleaned_curve=cleaned_np, correction_curve=correction, output_mask=output_mask,
+        actual_context_prediction=actual_np,
+        reference_context_prediction=reference_np,
+        correction_curve=correction, cleaned_curve=cleaned_np, output_mask=output_mask,
         physics_tokens=physics_tokens[0].numpy(),
         actual_instrument_tokens=actual_tokens[0].numpy(),
-        reference_instrument_tokens=quiet_tokens[0].numpy(),
+        reference_instrument_tokens=reference_tokens[0].numpy(),
         actual_peer_tic_ids=patch.tic_int[peer_rows],
         actual_peer_distances=peer_distances,
         quiet_peer_tic_ids=np.asarray([patch.tic_int[int(r)] for r in quiet["peer_rows"]]))
 
-    plot_correction(cadence_ids, raw_np, actual[0].numpy(), cleaned_np, correction,
+    plot_correction(cadence_ids, raw_np, actual_np, cleaned_np, correction,
                     output_mask,
                     f"TIC {patch.tic[row]} - sector {sector} cam{patch.target[1]}"
                     f"-ccd{patch.target[2]}: raw vs quiet-context counterfactual",
