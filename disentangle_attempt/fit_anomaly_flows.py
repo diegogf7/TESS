@@ -39,7 +39,8 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 from disentangle_attempt.dataset import (CrossSectorPatch,
-                                        infer_require_cross_sector)
+                                        infer_require_cross_sector,
+                                        target_from_checkpoint)
 from disentangle_attempt.infer import dual_context_prediction
 from disentangle_attempt.masking import complementary_masks
 from disentangle_attempt.model import DisentangleModel
@@ -302,7 +303,7 @@ def main():
     config = state["config"]
     device = pick_device(config.get("device", "auto"))
     run_dir = os.path.dirname(os.path.abspath(args.checkpoint))
-    target = state.get("target") or ("auto", "auto", "auto")
+    target = target_from_checkpoint(state, config)
     patch = CrossSectorPatch(
         args.parquet or config.get("parquet") or DEFAULT_PARQUET,
         target_sector=target[0], camera=target[1], ccd=target[2],

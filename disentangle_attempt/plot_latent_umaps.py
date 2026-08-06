@@ -34,7 +34,8 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 
 from disentangle_attempt.dataset import (CrossSectorPatch,
-                                        infer_require_cross_sector)
+                                        infer_require_cross_sector,
+                                        target_from_checkpoint)
 from disentangle_attempt.masking import complementary_masks
 from disentangle_attempt.model import DisentangleModel
 from disentangle_attempt.train import DEFAULT_PARQUET, pick_device
@@ -134,8 +135,7 @@ def main():
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = state["config"]
     device = pick_device(config.get("device", "auto"))
-    target = state.get("target")
-    sector, camera, ccd = target if target else ("auto", "auto", "auto")
+    sector, camera, ccd = target_from_checkpoint(state, config)
 
     # Same split rule this checkpoint trained under, so `split` labels are truthful.
     patch = CrossSectorPatch(

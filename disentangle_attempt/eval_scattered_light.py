@@ -35,7 +35,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from disentangle_attempt.dataset import (CrossSectorPatch,
-                                        infer_require_cross_sector)
+                                        infer_require_cross_sector,
+                                        target_from_checkpoint)
 from disentangle_attempt.infer import dual_context_prediction
 from disentangle_attempt.masking import complementary_masks
 from disentangle_attempt.model import DisentangleModel
@@ -168,8 +169,7 @@ def main():
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = state["config"]
     device = pick_device(config.get("device", "auto"))
-    target = state.get("target")
-    sector, camera, ccd = target if target else ("auto", "auto", "auto")
+    sector, camera, ccd = target_from_checkpoint(state, config)
 
     # require_cross_sector reproduces the eligibility rule this checkpoint trained
     # under, so the held-out TICs really are the ones it never saw.

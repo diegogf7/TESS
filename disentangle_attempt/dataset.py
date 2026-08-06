@@ -357,6 +357,23 @@ class CrossSectorAnchorDataset(Dataset):
         }
 
 
+def target_from_checkpoint(state, config):
+    """Rebuild the SAME chip set the checkpoint trained on.
+
+    checkpoint["target"] is only chips[0], a legacy single-chip field. When the config
+    asked for 'auto' the run covered every qualifying chip, so honouring `target` here
+    would rebuild one chip -- and a different TIC split, making the split labels wrong.
+    """
+    configured = (config.get("sector", "auto"), config.get("camera", "auto"),
+                  config.get("ccd", "auto"))
+    if all(v not in ("auto", None) for v in configured):
+        return configured                       # the run pinned a chip explicitly
+    if "physics_consistency_weight" in config:
+        # Pre-c74d750 code auto-picked exactly ONE chip, recorded in `target`.
+        return state.get("target") or ("auto", "auto", "auto")
+    return "auto", "auto", "auto"               # multi-chip run: every qualifying chip
+
+
 def infer_require_cross_sector(config, override="auto"):
     """Which eligibility rule did this checkpoint train under?
 

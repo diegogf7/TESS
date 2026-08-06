@@ -39,7 +39,8 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 from disentangle_attempt.dataset import (CrossSectorPatch,
-                                        infer_require_cross_sector)
+                                        infer_require_cross_sector,
+                                        target_from_checkpoint)
 from disentangle_attempt.fit_anomaly_flows import (THRESHOLD, fit_flow, nll,
                                                    percentile_against)
 from disentangle_attempt.infer import dual_context_prediction
@@ -222,7 +223,7 @@ def main():
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = state["config"]
     device = pick_device(config.get("device", "auto"))
-    target = state.get("target") or ("auto", "auto", "auto")
+    target = target_from_checkpoint(state, config)
     patch = CrossSectorPatch(
         args.parquet or config.get("parquet") or DEFAULT_PARQUET,
         target_sector=target[0], camera=target[1], ccd=target[2],
