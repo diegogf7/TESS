@@ -65,7 +65,8 @@ TEMPLATE = """<!doctype html>
  <div class="note">Colour = physics anomaly percentile. Ringed = &ge; __THRESHOLD__.
  UMAP position is visualization only; a high percentile is a tail-of-distribution pick,
  not a confirmed planet. Cleaned = raw &minus; correction, a quiet-context
- counterfactual.</div>
+ counterfactual. Faded points have no embedded curve (clicks snap to the nearest star
+ that does).</div>
 </header>
 <div id="wrap">
  <div>
@@ -109,12 +110,15 @@ function visible(p){
   if (quietInst.checked && p.ip >= 0.5) return false;
   return true;
 }
+function hasCurve(p){ return p.raw !== undefined; }
 function drawMap(){
   mctx.clearRect(0,0,map.width,map.height);
   DATA.points.forEach((p,i)=>{
     if(!visible(p)) return;
+    mctx.globalAlpha = hasCurve(p) ? 1 : 0.45;
     mctx.fillStyle = colour(p.pp);
-    mctx.beginPath(); mctx.arc(px(p.x),py(p.y), i===sel?5:2.2, 0, 7); mctx.fill();
+    mctx.beginPath(); mctx.arc(px(p.x),py(p.y), i===sel?5:1.7, 0, 7); mctx.fill();
+    mctx.globalAlpha = 1;
     if(p.pp>=TH){ mctx.strokeStyle='#ff5d73'; mctx.lineWidth=0.9;
       mctx.beginPath(); mctx.arc(px(p.x),py(p.y),5.5,0,7); mctx.stroke(); }
     if(i===sel){ mctx.strokeStyle='#fff'; mctx.lineWidth=1.6;
@@ -170,14 +174,15 @@ map.addEventListener('click', e=>{
   const r = map.getBoundingClientRect();
   const mx = e.clientX-r.left, my = e.clientY-r.top;
   let best=-1, bd=1e9;
-  DATA.points.forEach((p,i)=>{ if(!visible(p)) return;
+  DATA.points.forEach((p,i)=>{ if(!visible(p) || !hasCurve(p)) return;
     const d=(px(p.x)-mx)**2+(py(p.y)-my)**2; if(d<bd){bd=d;best=i;} });
   if(best>=0 && bd<400) show(best);
 });
 onlyCand.onchange = quietInst.onchange = drawMap;
 drawMap();
-if(DATA.points.length) show(DATA.points.findIndex(p=>p.pp>=TH) >= 0
-  ? DATA.points.findIndex(p=>p.pp>=TH) : 0);
+const first = DATA.points.findIndex(p=>hasCurve(p) && p.pp>=TH);
+if(first>=0) show(first); else { const any=DATA.points.findIndex(hasCurve);
+  if(any>=0) show(any); }
 </script></body></html>
 """
 
@@ -189,9 +194,13 @@ def main():
     parser.add_argument("--latents", required=True)
     parser.add_argument("--parquet", default=None)
     parser.add_argument("--out", default=None)
-    parser.add_argument("--max-curves", type=int, default=900)
-    parser.add_argument("--background", type=int, default=400)
-    parser.add_argument("--downsample", type=int, default=2)
+    parser.add_argument("--umap-points", type=int, default=10000,
+                        help="points drawn in the scatter (coordinates only: cheap)")
+    parser.add_argument("--max-curves", type=int, default=900,
+                        help="candidates whose curves are embedded")
+    parser.add_argument("--background", type=int, default=1100,
+                        help="non-candidates whose curves are embedded")
+    parser.add_argument("--downsample", type=int, default=4)
     parser.add_argument("--split", default="test")
     parser.add_argument("--require-cross-sector", default="auto",
                         choices=("auto", "yes", "no"))
@@ -207,15 +216,23 @@ def main():
     keep = np.ones(len(table), dtype=bool) if args.split == "all" \
         else (table["split"] == args.split).to_numpy()
     rng = np.random.default_rng(args.seed)
-    candidates = np.flatnonzero(keep & (table["physics_percentile"] >= THRESHOLD).to_numpy())
-    others = np.flatnonzero(keep & (table["physics_percentile"] < THRESHOLD).to_numpy())
+
+    # Every point in `shown` is drawn; only `chosen` carries an embedded light curve.
+    # Coordinates cost ~100 bytes a star, a curve costs ~1 KB, so this keeps the scatter
+    # as dense as the static figure while the file stays openable.
+    eligible = np.flatnonzero(keep)
+    shown = (np.sort(rng.permutation(eligible)[:args.umap_points])
+             if len(eligible) > args.umap_points else eligible)
+    is_candidate = (table["physics_percentile"].to_numpy()[shown] >= THRESHOLD)
+    candidates = shown[is_candidate]
+    others = shown[~is_candidate]
     if len(candidates) > args.max_curves:
         order = np.argsort(-table["physics_nll"].to_numpy()[candidates])
         candidates = candidates[order[:args.max_curves]]
     background = rng.permutation(others)[:args.background]
-    chosen = np.sort(np.concatenate([candidates, background]))
-    print(f"{len(chosen)} points: {len(candidates)} candidates + {len(background)} background",
-          flush=True)
+    chosen = set(int(v) for v in np.concatenate([candidates, background]))
+    print(f"{len(shown)} points drawn, {len(chosen)} with embedded curves "
+          f"({len(candidates)} candidates + {len(background)} background)", flush=True)
 
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = state["config"]
@@ -243,10 +260,11 @@ def main():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         coords = np.asarray(umap.UMAP(**UMAP_KWARGS).fit_transform(
-            StandardScaler().fit_transform(latents[chosen])))
+            StandardScaler().fit_transform(latents[shown])))
 
-    rows = table["row"].to_numpy()[chosen]
-    splits = table["split"].to_numpy()[chosen]
+    curve_index = np.asarray(sorted(chosen))
+    rows = table["row"].to_numpy()[curve_index]
+    splits = table["split"].to_numpy()[curve_index]
     chips = [(int(patch.sector[r]), int(patch.camera[r]), int(patch.ccd[r])) for r in rows]
     cleaned = {}
     for chip in sorted(set(chips)):
@@ -279,21 +297,27 @@ def main():
         return [None if not valid[i] else round(float(values[i]), 2)
                 for i in range(0, len(values), step)]
 
+    def curve_count():
+        return sum("raw" in p for p in points)
+
+    curve_rows = {int(index): int(row) for index, row in zip(curve_index, rows)}
     points = []
-    for k, index in enumerate(chosen):
-        row = int(rows[k])
-        valid = patch.M[row]
+    for k, index in enumerate(shown):
         record = table.iloc[index]
-        points.append({
+        point = {
             "tic": str(record["TIC"]), "chip": str(record["chip"]),
             "split": str(record["split"]), "cls": str(record["classification"]),
             "pp": float(record["physics_percentile"]),
             "ip": float(record["instrument_percentile"]),
             "nv": int(record["valid_cadences"]),
-            "x": float(coords[k, 0]), "y": float(coords[k, 1]),
-            "raw": encode(patch.X[row], valid),
-            "cleaned": encode(cleaned[row], valid) if row in cleaned else None,
-        })
+            "x": round(float(coords[k, 0]), 2), "y": round(float(coords[k, 1]), 2),
+        }
+        row = curve_rows.get(int(index))
+        if row is not None:
+            valid = patch.M[row]
+            point["raw"] = encode(patch.X[row], valid)
+            point["cleaned"] = encode(cleaned[row], valid) if row in cleaned else None
+        points.append(point)
 
     html = TEMPLATE.replace("__DATA__", json.dumps({"points": points},
                                                    separators=(",", ":")))
@@ -301,8 +325,10 @@ def main():
     with open(out, "w") as handle:
         handle.write(html)
     size = os.path.getsize(out) / 1e6
-    print(f"wrote {out} ({size:.1f} MB, {len(points)} stars, "
-          f"{sum(p['cleaned'] is not None for p in points)} with cleaned curves)")
+    with_curve = sum("raw" in p for p in points)
+    with_clean = sum(p.get("cleaned") is not None for p in points)
+    print(f"wrote {out} ({size:.1f} MB, {len(points)} points drawn, "
+          f"{with_curve} with curves, {with_clean} with cleaned curves)")
 
 
 if __name__ == "__main__":
