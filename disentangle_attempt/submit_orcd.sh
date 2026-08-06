@@ -48,9 +48,10 @@ echo "  parquet     : $PARQUET"
 echo "  run name    : $RUN_NAME"
 echo "========================================================"
 
-[ -f "$PARQUET" ] || { echo "FATAL: $PARQUET missing -- see the header of this script"; exit 1; }
+# -e not -f: fetch_data writes a parquet DIRECTORY (one file per chip).
+[ -e "$PARQUET" ] || { echo "FATAL: $PARQUET missing -- see the header of this script"; exit 1; }
 
-$PY -m disentangle_attempt.smoke_test
+DA_PARQUET="$PARQUET" $PY -m disentangle_attempt.smoke_test
 $PY -m disentangle_attempt.train --config "$CONFIG" --parquet "$PARQUET" --run-name "$RUN_NAME"
 $PY -m disentangle_attempt.infer \
     --checkpoint "disentangle_attempt/outputs/$RUN_NAME/best.pt" --parquet "$PARQUET"
