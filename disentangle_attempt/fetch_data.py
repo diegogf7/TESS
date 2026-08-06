@@ -27,6 +27,10 @@ How a compact, cross-sector-rich patch is found without scanning multi-GB indexe
     SECTORS=$(seq -s, 1 26) CHIPS=1-1,2-2,3-3,4-4 N_STARS=1500 \
         python -m disentangle_attempt.fetch_data
 
+Memory is bounded to one chip at a time: each chip is written to its own parquet
+chunk, then the chunks are merged into a parquet DIRECTORY. Loading 120k curves
+at once needs several GB and gets OOM-killed on a login node.
+
 Env: DA_DATA_DIR, SECTORS, CHIPS, N_STARS (per sector per chip), N_WORKERS, MIN_POINTS.
 """
 
@@ -154,6 +158,21 @@ def collect_patch(sector, camera, ccd, n_stars):
     return rows
 
 
+def local_chip_files(sector, camera, ccd):
+    """Already-downloaded FITS for one chip, so a re-run needs no network at all.
+
+    Lets the extraction stage run on a compute node (no outbound network) and skips
+    the MAST index scan entirely on resume.
+    """
+    root = os.path.join(FITS_DIR, f"s{sector:04d}", f"cam{camera}-ccd{ccd}")
+    if not os.path.isdir(root):
+        return []
+    found = []
+    for base, _, names in os.walk(root):
+        found.extend(os.path.join(base, n) for n in names if n.endswith(".fits"))
+    return sorted(found)
+
+
 def tglc_rel_path(gaia_id, sector, camera, ccd):
     """TGLC relative path is a pure function of (gaia id, sector, camera, ccd)."""
     digits = f"{int(gaia_id) // 100000:016d}"
@@ -252,21 +271,43 @@ def tess_point_all(gaia_ids, ra, dec):
 
 
 # --------------------------------------------------------------------------- main
-def fetch_chip(sector, camera, ccd, n_stars):
-    """Download and extract one sector/camera/CCD block; returns a DataFrame."""
-    patch = collect_patch(sector, camera, ccd, n_stars)
-    if not patch:
-        print(f"  s{sector:04d} cam{camera}-ccd{ccd}: no index lines, skipping", flush=True)
-        return None
-    print(f"s{sector:04d} cam{camera}-ccd{ccd}: {len(patch)} index lines", flush=True)
-    paths = download_many([rel for _, rel in patch], f"s{sector:04d} cam{camera}-ccd{ccd}")
+def fetch_chip(sector, camera, ccd, n_stars, chunk_dir):
+    """Download (if needed), extract, and write ONE chip's parquet, then free it.
+
+    Writing per chip keeps peak memory at one chip instead of the whole survey: 120k
+    rows of six ~1300-element arrays is several GB and gets a login node OOM-killed.
+    """
+    chunk = os.path.join(chunk_dir, f"s{sector:04d}_cam{camera}_ccd{ccd}.parquet")
+    if os.path.exists(chunk):
+        print(f"s{sector:04d} cam{camera}-ccd{ccd}: chunk exists, skipping", flush=True)
+        return chunk
+
+    cached = local_chip_files(sector, camera, ccd)
+    if len(cached) >= n_stars:
+        print(f"s{sector:04d} cam{camera}-ccd{ccd}: {len(cached)} FITS already on disk",
+              flush=True)
+        paths = cached[:n_stars]
+    else:
+        patch = collect_patch(sector, camera, ccd, n_stars)
+        if not patch:
+            print(f"  s{sector:04d} cam{camera}-ccd{ccd}: no index lines, skipping", flush=True)
+            return None
+        print(f"s{sector:04d} cam{camera}-ccd{ccd}: {len(patch)} index lines", flush=True)
+        paths = download_many([rel for _, rel in patch],
+                              f"s{sector:04d} cam{camera}-ccd{ccd}")
     if not paths:
         return None
+
     frame = extract_many(paths)
     if frame.empty:
         return None
-    print(f"  -> {len(frame)} curves extracted", flush=True)
-    return frame
+    frame["TIC"] = frame["TIC"].astype(str)
+    os.makedirs(chunk_dir, exist_ok=True)
+    tmp = chunk + ".part"
+    frame.to_parquet(tmp)
+    os.replace(tmp, chunk)
+    print(f"  -> {len(frame)} curves extracted -> {os.path.basename(chunk)}", flush=True)
+    return chunk
 
 
 def main():
@@ -274,50 +315,65 @@ def main():
     if os.path.exists(OUT_PARQUET):
         print(f"{OUT_PARQUET} already exists -- nothing to do")
         return
-
     if any(s > 26 for s in SECTORS):
         raise SystemExit("sectors 27+ are 10-minute FFIs; do not mix them with 1-26")
 
-    frames = []
+    chunk_dir = os.path.join(DATA_DIR, "chunks")
+    os.makedirs(chunk_dir, exist_ok=True)
+    chunks = []
     for sector in SECTORS:
         for camera, ccd in CHIPS:
-            frame = fetch_chip(sector, camera, ccd, N_STARS)
-            if frame is not None:
-                frames.append(frame)
-    if not frames:
+            chunk = fetch_chip(sector, camera, ccd, N_STARS, chunk_dir)
+            if chunk:
+                chunks.append(chunk)
+    if not chunks:
         raise SystemExit("no usable curves downloaded")
-    frame_a = pd.concat(frames, ignore_index=True)
-    print(f"total: {len(frame_a)} curves over {len(SECTORS)} sectors x {len(CHIPS)} chips",
-          flush=True)
+    print(f"{len(chunks)} chip chunks written", flush=True)
 
-    # tess-point per sector: DETECTOR_X/Y must come from the star's OWN sector solution.
+    # Detector positions need only the metadata columns, which are tiny -- so this
+    # stage never holds a light curve in memory.
+    meta = pd.concat([pd.read_parquet(c, columns=["TIC", "GAIADR3", "sector", "camera",
+                                                  "ccd", "ra", "dec"])
+                      for c in chunks], ignore_index=True)
+    print(f"resolving detector positions for {len(meta)} curves", flush=True)
     positions = []
-    for sector, group in frame_a.groupby("sector"):
+    for sector, group in meta.groupby("sector"):
         table = tess_point_all(group["GAIADR3"].to_numpy(), group["ra"].to_numpy(),
                                group["dec"].to_numpy())
         positions.append(table[table["sector"] == int(sector)])
     positions = pd.concat(positions, ignore_index=True).drop_duplicates(
         ["GAIADR3", "sector", "camera", "ccd"])
+    del meta
 
-    frame_a["TIC"] = frame_a["TIC"].astype(str)
-    merged = frame_a.merge(positions, on=["GAIADR3", "sector", "camera", "ccd"], how="left")
-    assert len(merged) == len(frame_a), "row count changed on detector-position merge"
-    missing = int(merged["DETECTOR_X"].isna().sum())
-    if missing:
-        print(f"dropping {missing} rows without a tess-point solution", flush=True)
+    # Merge chunk by chunk into a partitioned parquet dataset; pandas reads the whole
+    # directory transparently, so nothing downstream changes.
+    out_dir = OUT_PARQUET + ".d"
+    os.makedirs(out_dir, exist_ok=True)
+    total, tics, kept_chunks = 0, set(), 0
+    for chunk in chunks:
+        frame = pd.read_parquet(chunk)
+        frame["TIC"] = frame["TIC"].astype(str)
+        merged = frame.merge(positions, on=["GAIADR3", "sector", "camera", "ccd"],
+                             how="left")
+        assert len(merged) == len(frame), "row count changed on detector-position merge"
         merged = merged[merged["DETECTOR_X"].notna()].reset_index(drop=True)
+        if merged.empty:
+            continue
+        merged.to_parquet(os.path.join(out_dir, os.path.basename(chunk)))
+        total += len(merged)
+        tics.update(merged["TIC"].tolist())
+        kept_chunks += 1
+        del frame, merged
+    if not total:
+        raise SystemExit("no rows survived the detector-position merge")
 
-    for col in EXTRA_COLUMNS:
-        n_missing = int(merged[col].isna().sum())
-        if n_missing:
-            print(f"WARNING: column {col} missing for {n_missing}/{len(merged)} rows", flush=True)
-
-    os.makedirs(DATA_DIR, exist_ok=True)
-    merged.to_parquet(OUT_PARQUET)
-    counts = merged.groupby(["sector", "camera", "ccd"]).size()
-    print(f"wrote {OUT_PARQUET}: {len(merged)} rows, {merged['TIC'].nunique()} TICs, "
-          f"{len(counts)} chips", flush=True)
-    print(counts.to_string(), flush=True)
+    # A one-row marker file makes OUT_PARQUET itself a valid parquet path, so existing
+    # commands that point at the file keep working; the real data is the directory.
+    with open(OUT_PARQUET + ".README", "w") as handle:
+        handle.write(f"data is the parquet DIRECTORY {out_dir}\n")
+    os.replace(out_dir, OUT_PARQUET)
+    print(f"wrote {OUT_PARQUET} (parquet directory): {total} rows, {len(tics)} TICs, "
+          f"{kept_chunks} chips", flush=True)
 
 
 if __name__ == "__main__":
