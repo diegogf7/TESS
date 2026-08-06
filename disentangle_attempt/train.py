@@ -279,8 +279,16 @@ def main():
         print(f"branch-use {name}: d_recon {result['delta_reconstruction']:+.4f}", flush=True)
 
     # -------------------------------------------------------- quiet reference set
-    reference = build_reference_context(patch, split="train", n_peers=config["n_peers"])
-    reference_meta = save_reference_context(patch, reference, out_dir)
+    reference_meta = None
+    for index, chip in enumerate(patch.chips):
+        try:
+            reference = build_reference_context(patch, split="train",
+                                                n_peers=config["n_peers"], chip=chip)
+        except RuntimeError as error:            # a chip too thin for a quiet group
+            print(f"  chip {chip}: no quiet reference ({error})", flush=True)
+            continue
+        meta = save_reference_context(patch, reference, out_dir, primary=(index == 0))
+        reference_meta = reference_meta or meta
 
     test_metrics = evaluate(model, DataLoader(datasets["test"], batch_size=batch,
                                               shuffle=False, num_workers=workers),

@@ -69,11 +69,17 @@ def _group_score(patch, rows, use_background):
     return robust_amplitude(curve), event_fraction, basis
 
 
-def build_reference_context(patch, split="train", n_peers=None, verbose=True):
-    """Scan every train-split seed location and return the quietest observed group."""
+def build_reference_context(patch, split="train", n_peers=None, chip=None, verbose=True):
+    """Scan every train-split seed location on ONE chip and return its quietest group.
+
+    A quiet reference is chip-specific by construction: its peers must share the target's
+    absolute cadence grid and detector neighbourhood, so a multi-chip run needs one
+    reference per chip, not one overall.
+    """
     n_peers = int(n_peers or patch.n_peers)
-    pool = patch.split_pool[split]
-    sector, camera, ccd = patch.target
+    chip = tuple(chip) if chip is not None else patch.chips[0]
+    pool = patch.split_pool[split][chip]
+    sector, camera, ccd = chip
     assert (patch.sector[pool] == sector).all() and (patch.camera[pool] == camera).all() \
         and (patch.ccd[pool] == ccd).all(), "candidate pool is off the target chip"
 
@@ -98,17 +104,26 @@ def build_reference_context(patch, split="train", n_peers=None, verbose=True):
     if best is None:
         raise RuntimeError("no candidate group passed the quiet-reference requirements")
 
+    best["chip"] = chip
     if verbose:
-        print(f"quiet reference context: seed row {best['seed_row']}, score "
+        print(f"quiet reference context for chip {chip}: seed row {best['seed_row']}, score "
               f"{best['score']:.4f} ({best['score_basis']}), flagged-and-valid fraction "
               f"{best['event_fraction']:.4f}", flush=True)
     return best
 
 
-def save_reference_context(patch, reference, out_dir):
-    """reference_context.json (provenance) + reference_context.pt (curves/masks)."""
+def chip_suffix(chip):
+    return f"_s{chip[0]:04d}_cam{chip[1]}_ccd{chip[2]}"
+
+
+def save_reference_context(patch, reference, out_dir, primary=True):
+    """reference_context.json (provenance) + reference_context.pt (curves/masks).
+
+    `primary` also writes the unsuffixed filenames, so single-chip runs and older
+    tooling keep working unchanged.
+    """
     rows = reference["rows"]
-    sector, camera, ccd = patch.target
+    sector, camera, ccd = reference.get("chip", patch.chips[0])
     payload = {
         "peer_rows": torch.from_numpy(np.asarray(rows, np.int64)),
         "peer_raw": torch.from_numpy(patch.X[rows]),
@@ -122,7 +137,10 @@ def save_reference_context(patch, reference, out_dir):
         "peer_distances": torch.from_numpy(reference["distances"]),
     }
     os.makedirs(out_dir, exist_ok=True)
-    torch.save(payload, os.path.join(out_dir, "reference_context.pt"))
+    suffix = chip_suffix((sector, camera, ccd))
+    torch.save(payload, os.path.join(out_dir, f"reference_context{suffix}.pt"))
+    if primary:
+        torch.save(payload, os.path.join(out_dir, "reference_context.pt"))
 
     meta = {
         "sector": sector, "camera": camera, "ccd": ccd,
@@ -144,13 +162,17 @@ def save_reference_context(patch, reference, out_dir):
         "note": ("Observed low-systematics context used as a counterfactual baseline "
                  "condition. Not a correction target and not ground truth."),
     }
-    with open(os.path.join(out_dir, "reference_context.json"), "w") as handle:
+    with open(os.path.join(out_dir, f"reference_context{suffix}.json"), "w") as handle:
         json.dump(meta, handle, indent=2)
+    if primary:
+        with open(os.path.join(out_dir, "reference_context.json"), "w") as handle:
+            json.dump(meta, handle, indent=2)
     return meta
 
 
-def load_reference_context(out_dir, expected_cadence_ids=None):
-    payload = torch.load(os.path.join(out_dir, "reference_context.pt"), weights_only=True)
+def load_reference_context(out_dir, expected_cadence_ids=None, chip=None):
+    name = "reference_context.pt" if chip is None else f"reference_context{chip_suffix(chip)}.pt"
+    payload = torch.load(os.path.join(out_dir, name), weights_only=True)
     if expected_cadence_ids is not None:
         assert torch.equal(payload["cadence_ids"],
                            torch.as_tensor(expected_cadence_ids, dtype=payload["cadence_ids"].dtype)), \
