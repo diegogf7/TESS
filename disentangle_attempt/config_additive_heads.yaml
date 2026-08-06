@@ -1,0 +1,17 @@
+# Stage 2: two additive MLP heads on FROZEN encoders. Dataset geometry (chip, peers,
+# radius, split) is inherited from the Stage-1 checkpoint so both stages see identical
+# anchors and peer groups.
+seed: 42
+anchors_per_step: 32
+hidden_fraction: 0.25
+
+max_train_steps_per_epoch: 40
+max_val_steps_per_epoch: 20
+max_epochs: 30
+early_stopping_patience: 5
+max_runtime_minutes: 30
+
+learning_rate: 0.001
+weight_decay: 0.0001
+gradient_clip: 1.0
+device: auto

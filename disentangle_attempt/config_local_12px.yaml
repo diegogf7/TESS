@@ -1,0 +1,37 @@
+# Stage 1: the existing disentanglement model, trained from scratch on ONE chip with
+# the 12 px anchor-to-peer exclusion. Small on purpose -- 400 anchors -- so the whole
+# two-stage experiment runs locally in well under an hour.
+seed: 42
+curve_length: 1024
+anchors_per_step: 32
+n_peers: 8
+peer_min_distance_px: 12.0
+n_tokens: 32
+token_dim: 16
+hidden_fraction: 0.25
+mask_style: contiguous_windows
+
+sector: 1
+camera: 4
+ccd: 2
+max_eligible_anchors: 400     # -> 320 train / 40 val / 40 test
+min_valid_fraction: 0.5
+min_chip_anchors: 64
+
+d_model: 128
+n_layers: 4
+dropout: 0.0
+
+max_train_steps_per_epoch: 40
+max_val_steps_per_epoch: 20
+max_epochs: 20
+early_stopping_patience: 4
+max_runtime_minutes: 45
+
+optimizer: adamw
+learning_rate: 0.0003
+weight_decay: 0.0001
+gradient_clip: 1.0
+mixed_precision: true
+num_workers: 0
+device: auto

@@ -1,0 +1,32 @@
+{
+  "heads_checkpoint": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_12px/additive_heads/heads_best.pt",
+  "source_checkpoint": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_12px/base_model/best.pt",
+  "n_stars": 10,
+  "median": {
+    "physics_rms": 0.8977552056312561,
+    "instrument_rms": 0.5662494003772736,
+    "residual_rms": 0.6087661683559418,
+    "raw_rms": 1.1382521986961365,
+    "corr_instrument_peer_median": 0.7071395534697729,
+    "corr_instrument_raw": 0.47972801327705383,
+    "corr_physics_raw": 0.8145719170570374,
+    "max_abs_physics_minus_rawminus": 2.1907999515533447
+  },
+  "encoder_hashes": {
+    "physics_s4d": "e8c87a4dce989991",
+    "instrument_s4d": "6dab5b23b0a9b5e5"
+  },
+  "outputs": [
+    "per_star.csv",
+    "star_00_TIC261236552.png",
+    "star_01_TIC261204434.png",
+    "star_02_TIC261257622.png",
+    "star_03_TIC261257557.png",
+    "star_04_TIC261239098.png",
+    "star_05_TIC261239083.png",
+    "star_06_TIC261204363.png",
+    "star_07_TIC261156482.png",
+    "star_08_TIC261204324.png",
+    "star_09_TIC392025957.png"
+  ]
+}

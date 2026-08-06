@@ -1,0 +1,95 @@
+{
+  "source_checkpoint": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_12px/base_model/best.pt",
+  "source_config": {
+    "seed": 42,
+    "curve_length": 1024,
+    "anchors_per_step": 32,
+    "n_peers": 8,
+    "peer_min_distance_px": 12.0,
+    "n_tokens": 32,
+    "token_dim": 16,
+    "hidden_fraction": 0.25,
+    "mask_style": "contiguous_windows",
+    "sector": 1,
+    "camera": 4,
+    "ccd": 2,
+    "max_eligible_anchors": 400,
+    "min_valid_fraction": 0.5,
+    "min_chip_anchors": 64,
+    "d_model": 128,
+    "n_layers": 4,
+    "dropout": 0.0,
+    "max_train_steps_per_epoch": 40,
+    "max_val_steps_per_epoch": 20,
+    "max_epochs": 20,
+    "early_stopping_patience": 4,
+    "max_runtime_minutes": 45,
+    "optimizer": "adamw",
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "mixed_precision": true,
+    "num_workers": 0,
+    "device": "auto"
+  },
+  "config": {
+    "seed": 42,
+    "anchors_per_step": 32,
+    "hidden_fraction": 0.25,
+    "max_train_steps_per_epoch": 40,
+    "max_val_steps_per_epoch": 20,
+    "max_epochs": 30,
+    "early_stopping_patience": 5,
+    "max_runtime_minutes": 30,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "device": "auto"
+  },
+  "anchors": {
+    "train": 320,
+    "val": 40,
+    "test": 40
+  },
+  "parameters": {
+    "physics_s4d_frozen": 202000,
+    "instrument_s4d_frozen": 202000,
+    "physics_head": 788992,
+    "instrument_head": 2624000,
+    "trainable": 3412992
+  },
+  "best_epoch": 2,
+  "best_train_loss": 0.08776780059561133,
+  "best_val_loss": 0.13410976119339466,
+  "test_loss": 0.15690172053873538,
+  "stop_reason": "early_stopping",
+  "shuffle_controls": {
+    "shuffled_physics_latents": 0.7340296268463135,
+    "shuffled_instrument_latents": 0.21845782697200775
+  },
+  "branch_statistics": {
+    "physics_rms": 1.016221046447754,
+    "instrument_rms": 0.5144394040107727,
+    "physics_variance": 1.032416820526123,
+    "instrument_variance": 0.26103755831718445,
+    "physics_std_across_stars": 0.8502665162086487,
+    "instrument_std_across_stars": 0.36495256423950195,
+    "physics_std_within_curve": 0.9735185503959656,
+    "instrument_std_within_curve": 0.4727479815483093,
+    "instrument_to_physics_rms_ratio": 0.5062278584064153
+  },
+  "collapsed": {
+    "physics_head": false,
+    "instrument_head": false
+  },
+  "encoder_hashes_before": {
+    "physics_s4d": "e8c87a4dce989991",
+    "instrument_s4d": "6dab5b23b0a9b5e5"
+  },
+  "encoder_hashes_after": {
+    "physics_s4d": "e8c87a4dce989991",
+    "instrument_s4d": "6dab5b23b0a9b5e5"
+  },
+  "encoders_unchanged": true,
+  "runtime_minutes": 0.47
+}
