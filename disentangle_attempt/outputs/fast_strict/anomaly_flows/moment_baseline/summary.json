@@ -1,0 +1,136 @@
+{
+  "moment_model": "AutonLab/MOMENT-1-small",
+  "moment_weight_hash": "59228b6ebfd981b9",
+  "moment_weights_frozen": true,
+  "n_embeddings": 1000,
+  "embedding_dim": 1024,
+  "windowing": "two 512-cadence windows concatenated chronologically",
+  "pca_dim": 32,
+  "pca_retained_variance": 0.9045124053955078,
+  "flow": {
+    "best_epoch": 37,
+    "best_train_nll": 444.66534423828125,
+    "best_val_nll": 394.0342712402344
+  },
+  "test_nll": {
+    "median": 275.20770263671875,
+    "q1": 202.06909561157227,
+    "q3": 521.4673767089844
+  },
+  "comparisons": {
+    "all": {
+      "n": 1000,
+      "n_moment_anomalies": 49,
+      "n_disentangled_physics": 39,
+      "n_disentangled_instrument": 31,
+      "n_disentangled_both": 11,
+      "n_disentangled_typical": 919,
+      "moment_vs_physics": {
+        "n_a": 49,
+        "n_b": 50,
+        "overlap": 5,
+        "jaccard": 0.05319148936170213
+      },
+      "moment_vs_instrument": {
+        "n_a": 49,
+        "n_b": 42,
+        "overlap": 0,
+        "jaccard": 0.0
+      },
+      "moment_anomalies_by_disentangled_category": {
+        "typical": 44,
+        "physics": 5
+      },
+      "spearman_moment_physics": 0.30253940352364067,
+      "spearman_moment_instrument": 0.02104198142255554
+    },
+    "train": {
+      "n": 800,
+      "n_moment_anomalies": 41,
+      "n_disentangled_physics": 30,
+      "n_disentangled_instrument": 30,
+      "n_disentangled_both": 11,
+      "n_disentangled_typical": 729,
+      "moment_vs_physics": {
+        "n_a": 41,
+        "n_b": 41,
+        "overlap": 5,
+        "jaccard": 0.06493506493506493
+      },
+      "moment_vs_instrument": {
+        "n_a": 41,
+        "n_b": 41,
+        "overlap": 0,
+        "jaccard": 0.0
+      },
+      "moment_anomalies_by_disentangled_category": {
+        "typical": 36,
+        "physics": 5
+      },
+      "spearman_moment_physics": 0.3121303548911795,
+      "spearman_moment_instrument": 0.028383020910970176
+    },
+    "val": {
+      "n": 100,
+      "n_moment_anomalies": 3,
+      "n_disentangled_physics": 4,
+      "n_disentangled_instrument": 1,
+      "n_disentangled_both": 0,
+      "n_disentangled_typical": 95,
+      "moment_vs_physics": {
+        "n_a": 3,
+        "n_b": 4,
+        "overlap": 0,
+        "jaccard": 0.0
+      },
+      "moment_vs_instrument": {
+        "n_a": 3,
+        "n_b": 1,
+        "overlap": 0,
+        "jaccard": 0.0
+      },
+      "moment_anomalies_by_disentangled_category": {
+        "typical": 3
+      },
+      "spearman_moment_physics": 0.29793350117779593,
+      "spearman_moment_instrument": 0.017400097222317692
+    },
+    "test": {
+      "n": 100,
+      "n_moment_anomalies": 5,
+      "n_disentangled_physics": 5,
+      "n_disentangled_instrument": 0,
+      "n_disentangled_both": 0,
+      "n_disentangled_typical": 95,
+      "moment_vs_physics": {
+        "n_a": 5,
+        "n_b": 5,
+        "overlap": 0,
+        "jaccard": 0.0
+      },
+      "moment_vs_instrument": {
+        "n_a": 5,
+        "n_b": 0,
+        "overlap": 0,
+        "jaccard": 0.0
+      },
+      "moment_anomalies_by_disentangled_category": {
+        "typical": 5
+      },
+      "spearman_moment_physics": 0.27302432208170285,
+      "spearman_moment_instrument": -0.1272128274984698
+    }
+  },
+  "empty_categories": [
+    "MOMENT and physics",
+    "MOMENT and instrument"
+  ],
+  "checks": {
+    "same_rows_and_splits": true,
+    "all_embeddings_finite": true,
+    "all_scores_finite": true,
+    "scaler_pca_flow_fit_on_train_only": true
+  },
+  "interpretation_note": "Candidates are tail-of-distribution picks, not confirmed anomalies. UMAP is visualization only.",
+  "runtime_seconds": 27.6
+}
