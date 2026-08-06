@@ -357,6 +357,20 @@ class CrossSectorAnchorDataset(Dataset):
         }
 
 
+def infer_require_cross_sector(config, override="auto"):
+    """Which eligibility rule did this checkpoint train under?
+
+    Runs before commit ad6c7ad required a partner sector; the tell is that their config
+    still carries physics_consistency_weight. Getting this wrong rebuilds a different
+    TIC split, so "held-out" stars would not be the ones the model was held out from.
+    """
+    if override in ("yes", True):
+        return True
+    if override in ("no", False):
+        return False
+    return "physics_consistency_weight" in config
+
+
 def audit_batch(patch, batch, verbose=True):
     """Assert the data contract on a real batch, and print row 0.
 

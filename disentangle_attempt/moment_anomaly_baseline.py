@@ -38,7 +38,8 @@ from scipy.stats import spearmanr
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
-from disentangle_attempt.dataset import CrossSectorPatch
+from disentangle_attempt.dataset import (CrossSectorPatch,
+                                        infer_require_cross_sector)
 from disentangle_attempt.fit_anomaly_flows import (THRESHOLD, fit_flow, nll,
                                                    percentile_against)
 from disentangle_attempt.infer import dual_context_prediction
@@ -206,6 +207,8 @@ def main():
     parser.add_argument("--disentangled-scores", required=True)
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--parquet", default=None)
+    parser.add_argument("--require-cross-sector", default="auto",
+                        choices=("auto", "yes", "no"))
     parser.add_argument("--max-samples", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
@@ -226,7 +229,8 @@ def main():
         curve_length=config["curve_length"], n_peers=config["n_peers"],
         min_valid_fraction=config.get("min_valid_fraction", 0.5),
         split_seed=config["seed"], max_eligible_anchors=config.get("max_eligible_anchors"),
-        require_cross_sector=True, verbose=False)
+        require_cross_sector=infer_require_cross_sector(
+            config, args.require_cross_sector), verbose=False)
 
     rows, splits = select_anchors(patch, args.max_samples)
     reference = pd.read_csv(os.path.join(args.latents_dir, "umap_coordinates.csv"))

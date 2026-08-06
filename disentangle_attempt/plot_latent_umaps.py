@@ -33,7 +33,8 @@ import matplotlib.pyplot as plt
 
 from sklearn.preprocessing import StandardScaler
 
-from disentangle_attempt.dataset import CrossSectorPatch
+from disentangle_attempt.dataset import (CrossSectorPatch,
+                                        infer_require_cross_sector)
 from disentangle_attempt.masking import complementary_masks
 from disentangle_attempt.model import DisentangleModel
 from disentangle_attempt.train import DEFAULT_PARQUET, pick_device
@@ -119,6 +120,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--parquet", default=None)
+    parser.add_argument("--require-cross-sector", default="auto",
+                        choices=("auto", "yes", "no"))
     parser.add_argument("--max-samples", type=int, default=1000)
     parser.add_argument("--output-dir", default=None)
     args = parser.parse_args()
@@ -141,7 +144,8 @@ def main():
         curve_length=config["curve_length"], n_peers=config["n_peers"],
         min_valid_fraction=config.get("min_valid_fraction", 0.5),
         split_seed=config["seed"], max_eligible_anchors=config.get("max_eligible_anchors"),
-        require_cross_sector=True, verbose=False)
+        require_cross_sector=infer_require_cross_sector(
+            config, args.require_cross_sector), verbose=False)
 
     model = DisentangleModel(d_model=config.get("d_model", 128),
                              n_layers=config.get("n_layers", 4), dropout=0.0,

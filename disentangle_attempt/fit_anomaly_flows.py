@@ -38,7 +38,8 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
-from disentangle_attempt.dataset import CrossSectorPatch
+from disentangle_attempt.dataset import (CrossSectorPatch,
+                                        infer_require_cross_sector)
 from disentangle_attempt.infer import dual_context_prediction
 from disentangle_attempt.masking import complementary_masks
 from disentangle_attempt.model import DisentangleModel
@@ -207,6 +208,8 @@ def main():
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--parquet", default=None)
+    parser.add_argument("--require-cross-sector", default="auto",
+                        choices=("auto", "yes", "no"))
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -306,7 +309,8 @@ def main():
         curve_length=config["curve_length"], n_peers=config["n_peers"],
         min_valid_fraction=config.get("min_valid_fraction", 0.5),
         split_seed=config["seed"], max_eligible_anchors=config.get("max_eligible_anchors"),
-        require_cross_sector=True, verbose=False)
+        require_cross_sector=infer_require_cross_sector(
+            config, args.require_cross_sector), verbose=False)
     model = DisentangleModel(d_model=config.get("d_model", 128),
                              n_layers=config.get("n_layers", 4), dropout=0.0,
                              n_peers=config["n_peers"], n_tokens=config["n_tokens"],
@@ -314,7 +318,15 @@ def main():
                              curve_length=config["curve_length"]).to(device)
     model.load_state_dict(state["model"])
     model.eval()
-    quiet = load_reference_context(run_dir, expected_cadence_ids=patch.grids[patch.target[0]])
+    # reference_context.pt is written only when training finishes, so a mid-run
+    # checkpoint can still be scored -- just without the cleaned-curve galleries.
+    quiet = None
+    if os.path.exists(os.path.join(run_dir, "reference_context.pt")):
+        quiet = load_reference_context(run_dir,
+                                       expected_cadence_ids=patch.grids[patch.target[0]])
+    else:
+        print("no reference_context.pt yet (training still running): scores and score "
+              "plots only, no candidate curve galleries", flush=True)
     masks = complementary_masks(config["curve_length"], n_masks=4)
 
     tic_to_row = {}
@@ -331,7 +343,7 @@ def main():
         galleries[kind] = (rows, pick.to_dict("records")[:len(rows)])
 
     needed = sorted({r for rows, _ in galleries.values() for r in rows})
-    if needed:
+    if needed and quiet is not None:
         peer_rows = np.stack([patch.peers_for_row(r, "test")[0] for r in needed])
         actual, reference, _, _, _ = dual_context_prediction(
             model, torch.from_numpy(patch.X[needed]), torch.from_numpy(patch.M[needed]),

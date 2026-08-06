@@ -34,7 +34,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from disentangle_attempt.dataset import CrossSectorPatch
+from disentangle_attempt.dataset import (CrossSectorPatch,
+                                        infer_require_cross_sector)
 from disentangle_attempt.infer import dual_context_prediction
 from disentangle_attempt.masking import complementary_masks
 from disentangle_attempt.model import DisentangleModel
@@ -151,6 +152,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--parquet", default=None)
+    parser.add_argument("--require-cross-sector", default="auto",
+                        choices=("auto", "yes", "no"))
     parser.add_argument("--n-stars", type=int, default=100)
     parser.add_argument("--n-control", type=int, default=50)
     parser.add_argument("--n-inject", type=int, default=20)
@@ -176,7 +179,8 @@ def main():
         curve_length=config["curve_length"], n_peers=config["n_peers"],
         min_valid_fraction=config.get("min_valid_fraction", 0.5),
         split_seed=config["seed"], max_eligible_anchors=config.get("max_eligible_anchors"),
-        require_cross_sector=True, verbose=False)
+        require_cross_sector=infer_require_cross_sector(
+            config, args.require_cross_sector), verbose=False)
     anchors_all = patch.split_anchors["test"]
     assert len(anchors_all), "no test anchors"
 
