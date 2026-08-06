@@ -183,20 +183,22 @@ def gallery(patch, rows, curves, table_rows, kind, path):
         x = np.arange(len(valid))
         show = lambda a: np.where(valid, a, np.nan)
         ax.plot(x, show(patch.X[row]), lw=0.7, color="0.6", label="raw")
-        if kind in ("physics", "both"):
-            ax.plot(x, show(curves[row]["cleaned"]), lw=0.8, color="tab:blue",
-                    label="cleaned")
-        if kind in ("instrument", "both"):
-            ax.plot(x, show(curves[row]["correction"]), lw=0.8, color="tab:red",
+        # curves is empty when reference_context.pt does not exist yet: raw only.
+        drawn = curves.get(row)
+        if drawn and kind in ("physics", "both"):
+            ax.plot(x, show(drawn["cleaned"]), lw=0.8, color="tab:blue", label="cleaned")
+        if drawn and kind in ("instrument", "both"):
+            ax.plot(x, show(drawn["correction"]), lw=0.8, color="tab:red",
                     label="correction")
-        if kind == "instrument":
-            ax.plot(x, show(curves[row]["peer_common"]), lw=0.8, color="tab:green",
+        if drawn and kind == "instrument":
+            ax.plot(x, show(drawn["peer_common"]), lw=0.8, color="tab:green",
                     label="peer common mode")
         ax.set_ylabel(f"TIC {meta['TIC']}\nphys {meta['physics_percentile']:.3f}\n"
                       f"inst {meta['instrument_percentile']:.3f}", fontsize=6)
     axes[0].legend(fontsize=7, ncol=4, loc="upper right")
     axes[-1].set_xlabel("cadence index (gaps = removed cadences)")
-    fig.suptitle(f"top {kind} candidates (test split)", fontsize=11)
+    note = "" if curves else "  (raw only: reference context not written until training ends)"
+    fig.suptitle(f"top {kind} candidates (test split){note}", fontsize=11)
     fig.tight_layout()
     fig.savefig(path, dpi=120, bbox_inches="tight")
     plt.close(fig)
