@@ -12,18 +12,19 @@ mask_style: contiguous_windows
 sector: auto
 camera: auto
 ccd: auto
-max_eligible_anchors: null       # use every eligible cross-sector anchor
+max_eligible_anchors: null       # use every eligible anchor
 min_valid_fraction: 0.5
+min_chip_anchors: 64      # a chip needs this many eligible anchors to be trained on
 
 d_model: 256
 n_layers: 4
 dropout: 0.1
 
-max_train_steps_per_epoch: 300
+max_train_steps_per_epoch: 1000
 max_val_steps_per_epoch: 40
 max_epochs: 60
 early_stopping_patience: 6
-max_runtime_minutes: 300
+max_runtime_minutes: 420
 
 optimizer: adamw
 learning_rate: 0.0003
