@@ -1,0 +1,46 @@
+{
+  "checkpoint": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/fast_strict/best.pt",
+  "identity_max_abs_correction": 0.0,
+  "stars": [
+    {
+      "TIC": "261236568",
+      "corrected_correction_rms": 0.2769180238246918,
+      "old_buggy_correction_rms": 0.44890257716178894,
+      "decoder_reconstruction_rms": 0.594448983669281
+    },
+    {
+      "TIC": "261236555",
+      "corrected_correction_rms": 0.4098859131336212,
+      "old_buggy_correction_rms": 0.3659597933292389,
+      "decoder_reconstruction_rms": 0.596380889415741
+    },
+    {
+      "TIC": "261239166",
+      "corrected_correction_rms": 0.7105473875999451,
+      "old_buggy_correction_rms": 0.6048100590705872,
+      "decoder_reconstruction_rms": 0.4508877396583557
+    },
+    {
+      "TIC": "261206874",
+      "corrected_correction_rms": 0.30240190029144287,
+      "old_buggy_correction_rms": 0.5733115673065186,
+      "decoder_reconstruction_rms": 0.5265267491340637
+    },
+    {
+      "TIC": "261204438",
+      "corrected_correction_rms": 0.5592690706253052,
+      "old_buggy_correction_rms": 0.9434686899185181,
+      "decoder_reconstruction_rms": 0.8186249136924744
+    },
+    {
+      "TIC": "261156580",
+      "corrected_correction_rms": 0.5134164094924927,
+      "old_buggy_correction_rms": 1.3530501127243042,
+      "decoder_reconstruction_rms": 1.6276899576187134
+    }
+  ],
+  "equations": {
+    "correction": "pred_actual - pred_reference",
+    "cleaned": "raw_anchor - correction"
+  }
+}

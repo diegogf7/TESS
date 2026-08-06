@@ -1,9 +1,10 @@
 """Counterfactual inference: raw -> cleaned under a quiet observed instrument context.
 
-The physics encoder is fed the anchor TIC's curve from a DIFFERENT sector -- never the
-anchor sector -- so no artificial masking is needed or used. That one physics latent is
-decoded twice, once with the star's actual nearest peers and once with the quiet
-reference peers:
+The physics encoder is fed the anchor's OWN curve -- same TIC, same sector, same
+cadence grid -- under four complementary masks that tile all 1024 cadences, so every
+output cadence is predicted while hidden. Each mask's physics latent is decoded twice,
+once with the star's actual nearest same-sector/camera/CCD peers and once with the
+quiet reference peers:
 
     correction = pred_actual - pred_reference
     cleaned    = raw_anchor - correction

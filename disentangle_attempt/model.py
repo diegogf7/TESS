@@ -1,12 +1,15 @@
 """Dual-latent model: shared physics S4D + shared instrument S4D + one shared MLP.
 
-Branch contract (direct cross-sector):
-  physics    sees the anchor TIC in a DIFFERENT sector -- never the anchor sector;
-  instrument sees ONLY other TICs on the anchor's sector/camera/CCD/cadence grid;
-  decoder    sees the cross-sector physics latent concatenated with the ordered peers.
+Branch contract (masked same-sector):
+  physics    sees the anchor's OWN curve -- same TIC, same sector, same cadence grid --
+             with ~25% of its valid cadences hidden by contiguous windows; at inference
+             the four complementary masks tile the whole curve;
+  instrument sees ONLY other TICs on the anchor's sector/camera/CCD and the same
+             absolute cadence grid, ordered nearest-to-farthest on the detector;
+  decoder    sees the physics latent concatenated with the ordered peer latents.
 
-The loss is scored only on hidden cadences, so the physics branch cannot copy; the
-instrument branch has the right times but the wrong stars.
+The loss is scored only on hidden cadences, so the physics branch cannot copy the
+values it must predict; the instrument branch has the right times but the wrong stars.
 
 Both encoders are the repository's `S4Model` (src/models/s4d.py). That encoder takes
 (B, L, d_input) and its masked token pooling drops missing cadences, so a curve
