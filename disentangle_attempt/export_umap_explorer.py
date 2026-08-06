@@ -65,15 +65,15 @@ TEMPLATE = """<!doctype html>
  <div class="note">Colour = physics anomaly percentile. Ringed = &ge; __THRESHOLD__.
  UMAP position is visualization only; a high percentile is a tail-of-distribution pick,
  not a confirmed planet. Cleaned = raw &minus; correction, a quiet-context
- counterfactual. Faded points have no embedded curve (clicks snap to the nearest star
- that does).</div>
+ counterfactual. Only ringed candidates are clickable; faded points are context.</div>
 </header>
 <div id="wrap">
  <div>
   <canvas id="map" width="620" height="560"></canvas>
   <div style="margin-top:8px">
-   <label><input type="checkbox" id="onlyCand"> candidates only</label>
+   <label><input type="checkbox" id="onlyCand"> show candidates only</label>
    <label><input type="checkbox" id="quietInst"> quiet instrument (&lt;0.5)</label>
+   <label><input type="checkbox" id="clickAny"> allow clicking non-candidates</label>
   </div>
  </div>
  <div id="side">
@@ -90,6 +90,7 @@ const cur = document.getElementById('curve'), cctx = cur.getContext('2d');
 const cor = document.getElementById('corr'), rctx = cor.getContext('2d');
 const meta = document.getElementById('meta');
 const onlyCand = document.getElementById('onlyCand'), quietInst = document.getElementById('quietInst');
+const clickAny = document.getElementById('clickAny');
 let sel = -1;
 
 const xs = DATA.points.map(p => p.x), ys = DATA.points.map(p => p.y);
@@ -111,6 +112,8 @@ function visible(p){
   return true;
 }
 function hasCurve(p){ return p.raw !== undefined; }
+// Only ringed candidates are selectable unless the box is ticked.
+function clickable(p){ return hasCurve(p) && visible(p) && (clickAny.checked || p.pp >= TH); }
 function drawMap(){
   mctx.clearRect(0,0,map.width,map.height);
   DATA.points.forEach((p,i)=>{
@@ -174,11 +177,19 @@ map.addEventListener('click', e=>{
   const r = map.getBoundingClientRect();
   const mx = e.clientX-r.left, my = e.clientY-r.top;
   let best=-1, bd=1e9;
-  DATA.points.forEach((p,i)=>{ if(!visible(p) || !hasCurve(p)) return;
+  DATA.points.forEach((p,i)=>{ if(!clickable(p)) return;
     const d=(px(p.x)-mx)**2+(py(p.y)-my)**2; if(d<bd){bd=d;best=i;} });
-  if(best>=0 && bd<400) show(best);
+  if(best>=0 && bd<900) show(best);
 });
-onlyCand.onchange = quietInst.onchange = drawMap;
+onlyCand.onchange = quietInst.onchange = clickAny.onchange = drawMap;
+map.addEventListener('mousemove', e=>{
+  const r = map.getBoundingClientRect();
+  const mx = e.clientX-r.left, my = e.clientY-r.top;
+  let near = false;
+  DATA.points.forEach(p=>{ if(!clickable(p)) return;
+    if((px(p.x)-mx)**2+(py(p.y)-my)**2 < 900) near = true; });
+  map.style.cursor = near ? 'pointer' : 'default';
+});
 drawMap();
 const first = DATA.points.findIndex(p=>hasCurve(p) && p.pp>=TH);
 if(first>=0) show(first); else { const any=DATA.points.findIndex(hasCurve);
@@ -196,8 +207,8 @@ def main():
     parser.add_argument("--out", default=None)
     parser.add_argument("--umap-points", type=int, default=10000,
                         help="points drawn in the scatter (coordinates only: cheap)")
-    parser.add_argument("--max-curves", type=int, default=900,
-                        help="candidates whose curves are embedded")
+    parser.add_argument("--max-curves", type=int, default=0,
+                        help="cap on candidates embedded (0 = every candidate)")
     parser.add_argument("--background", type=int, default=1100,
                         help="non-candidates whose curves are embedded")
     parser.add_argument("--downsample", type=int, default=4)
@@ -221,18 +232,22 @@ def main():
     # Coordinates cost ~100 bytes a star, a curve costs ~1 KB, so this keeps the scatter
     # as dense as the static figure while the file stays openable.
     eligible = np.flatnonzero(keep)
-    shown = (np.sort(rng.permutation(eligible)[:args.umap_points])
-             if len(eligible) > args.umap_points else eligible)
-    is_candidate = (table["physics_percentile"].to_numpy()[shown] >= THRESHOLD)
-    candidates = shown[is_candidate]
-    others = shown[~is_candidate]
-    if len(candidates) > args.max_curves:
+    is_candidate = table["physics_percentile"].to_numpy() >= THRESHOLD
+    candidates = eligible[is_candidate[eligible]]
+    others = eligible[~is_candidate[eligible]]
+    if args.max_curves and len(candidates) > args.max_curves:
         order = np.argsort(-table["physics_nll"].to_numpy()[candidates])
         candidates = candidates[order[:args.max_curves]]
-    background = rng.permutation(others)[:args.background]
-    chosen = set(int(v) for v in np.concatenate([candidates, background]))
-    print(f"{len(shown)} points drawn, {len(chosen)} with embedded curves "
-          f"({len(candidates)} candidates + {len(background)} background)", flush=True)
+
+    # Every candidate is drawn AND carries a curve, so no ringed point is ever
+    # unclickable. Background stars only fill out the shape of the embedding.
+    room = max(args.umap_points - len(candidates), 0)
+    background_shown = rng.permutation(others)[:room]
+    shown = np.sort(np.concatenate([candidates, background_shown]))
+    background_curves = rng.permutation(background_shown)[:args.background]
+    chosen = set(int(v) for v in np.concatenate([candidates, background_curves]))
+    print(f"{len(shown)} points drawn ({len(candidates)} candidates, all clickable) | "
+          f"{len(chosen)} with embedded curves", flush=True)
 
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = state["config"]
