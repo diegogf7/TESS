@@ -61,19 +61,22 @@ TEMPLATE = """<!doctype html>
  .both{background:#4a2a6b;color:#e8d9ff}.typ{background:#23262f;color:#9aa3b5}
 </style></head><body>
 <header>
- <h1>Physics-latent UMAP &mdash; click a point to see its light curve</h1>
+ <h1>Anomaly candidates in the physics-latent UMAP &mdash; click any point</h1>
  <div class="note">Colour = physics anomaly percentile. Ringed = &ge; __THRESHOLD__.
  UMAP position is visualization only; a high percentile is a tail-of-distribution pick,
  not a confirmed planet. Cleaned = raw &minus; correction, a quiet-context
- counterfactual. Only ringed candidates are clickable; faded points are context.</div>
+ counterfactual. Only stars at or above the 95th percentile in physics or instrument
+ are plotted, and every one of them is clickable.</div>
 </header>
 <div id="wrap">
  <div>
   <canvas id="map" width="620" height="560"></canvas>
   <div style="margin-top:8px">
-   <label><input type="checkbox" id="onlyCand"> show candidates only</label>
+   <label><input type="checkbox" id="onlyCand"> physics candidates only</label>
    <label><input type="checkbox" id="quietInst"> quiet instrument (&lt;0.5)</label>
-   <label><input type="checkbox" id="clickAny"> allow clicking non-candidates</label>
+   <span class="note">
+     <span class="pill phy">physics</span><span class="pill ins">instrument</span>
+     <span class="pill both">both (ringed)</span></span>
   </div>
  </div>
  <div id="side">
@@ -90,7 +93,7 @@ const cur = document.getElementById('curve'), cctx = cur.getContext('2d');
 const cor = document.getElementById('corr'), rctx = cor.getContext('2d');
 const meta = document.getElementById('meta');
 const onlyCand = document.getElementById('onlyCand'), quietInst = document.getElementById('quietInst');
-const clickAny = document.getElementById('clickAny');
+
 let sel = -1;
 
 const xs = DATA.points.map(p => p.x), ys = DATA.points.map(p => p.y);
@@ -100,30 +103,23 @@ const PAD = 26;
 const px = x => PAD + (x - xmin) / (xmax - xmin || 1) * (map.width - 2 * PAD);
 const py = y => map.height - PAD - (y - ymin) / (ymax - ymin || 1) * (map.height - 2 * PAD);
 
-function colour(v){                       // viridis-ish ramp
-  const s = [[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
-  const t = Math.max(0, Math.min(1, v)) * (s.length - 1);
-  const i = Math.floor(t), f = t - i, a = s[i], b = s[Math.min(i + 1, s.length - 1)];
-  return `rgb(${a.map((c,k)=>Math.round(c+(b[k]-c)*f)).join(',')})`;
-}
+const CATCOL = {physics:'#ff5d73', instrument:'#4aa3ff', both:'#c07bff', typical:'#8b93a7'};
+function colour(p){ return CATCOL[p.cls] || CATCOL.typical; }
 function visible(p){
-  if (onlyCand.checked && p.pp < TH) return false;
+  if (onlyCand.checked && p.cls !== 'physics' && p.cls !== 'both') return false;
   if (quietInst.checked && p.ip >= 0.5) return false;
   return true;
 }
-function hasCurve(p){ return p.raw !== undefined; }
-// Only ringed candidates are selectable unless the box is ticked.
-function clickable(p){ return hasCurve(p) && visible(p) && (clickAny.checked || p.pp >= TH); }
+// Everything plotted is a candidate, so everything visible is clickable.
+function clickable(p){ return visible(p); }
 function drawMap(){
   mctx.clearRect(0,0,map.width,map.height);
   DATA.points.forEach((p,i)=>{
     if(!visible(p)) return;
-    mctx.globalAlpha = hasCurve(p) ? 1 : 0.45;
-    mctx.fillStyle = colour(p.pp);
-    mctx.beginPath(); mctx.arc(px(p.x),py(p.y), i===sel?5:1.7, 0, 7); mctx.fill();
-    mctx.globalAlpha = 1;
-    if(p.pp>=TH){ mctx.strokeStyle='#ff5d73'; mctx.lineWidth=0.9;
-      mctx.beginPath(); mctx.arc(px(p.x),py(p.y),5.5,0,7); mctx.stroke(); }
+    mctx.fillStyle = colour(p);
+    mctx.beginPath(); mctx.arc(px(p.x),py(p.y), i===sel?6:3.2, 0, 7); mctx.fill();
+    if(p.cls==='both'){ mctx.strokeStyle='#ffffff'; mctx.lineWidth=1.1;
+      mctx.beginPath(); mctx.arc(px(p.x),py(p.y),6.5,0,7); mctx.stroke(); }
     if(i===sel){ mctx.strokeStyle='#fff'; mctx.lineWidth=1.6;
       mctx.beginPath(); mctx.arc(px(p.x),py(p.y),8,0,7); mctx.stroke(); }
   });
@@ -181,7 +177,7 @@ map.addEventListener('click', e=>{
     const d=(px(p.x)-mx)**2+(py(p.y)-my)**2; if(d<bd){bd=d;best=i;} });
   if(best>=0 && bd<900) show(best);
 });
-onlyCand.onchange = quietInst.onchange = clickAny.onchange = drawMap;
+onlyCand.onchange = quietInst.onchange = drawMap;
 map.addEventListener('mousemove', e=>{
   const r = map.getBoundingClientRect();
   const mx = e.clientX-r.left, my = e.clientY-r.top;
@@ -191,9 +187,7 @@ map.addEventListener('mousemove', e=>{
   map.style.cursor = near ? 'pointer' : 'default';
 });
 drawMap();
-const first = DATA.points.findIndex(p=>hasCurve(p) && p.pp>=TH);
-if(first>=0) show(first); else { const any=DATA.points.findIndex(hasCurve);
-  if(any>=0) show(any); }
+if(DATA.points.length) show(0);
 </script></body></html>
 """
 
@@ -209,8 +203,8 @@ def main():
                         help="points drawn in the scatter (coordinates only: cheap)")
     parser.add_argument("--max-curves", type=int, default=0,
                         help="cap on candidates embedded (0 = every candidate)")
-    parser.add_argument("--background", type=int, default=1100,
-                        help="non-candidates whose curves are embedded")
+    parser.add_argument("--background", type=int, default=0,
+                        help="unused: only candidates are rendered")
     parser.add_argument("--downsample", type=int, default=4)
     parser.add_argument("--split", default="test")
     parser.add_argument("--require-cross-sector", default="auto",
@@ -232,22 +226,27 @@ def main():
     # Coordinates cost ~100 bytes a star, a curve costs ~1 KB, so this keeps the scatter
     # as dense as the static figure while the file stays openable.
     eligible = np.flatnonzero(keep)
-    is_candidate = table["physics_percentile"].to_numpy() >= THRESHOLD
-    candidates = eligible[is_candidate[eligible]]
-    others = eligible[~is_candidate[eligible]]
-    if args.max_curves and len(candidates) > args.max_curves:
-        order = np.argsort(-table["physics_nll"].to_numpy()[candidates])
-        candidates = candidates[order[:args.max_curves]]
+    physics_hit = table["physics_percentile"].to_numpy() >= THRESHOLD
+    instrument_hit = table["instrument_percentile"].to_numpy() >= THRESHOLD
+    candidate = physics_hit | instrument_hit
+    shown = eligible[candidate[eligible]]
+    if args.max_curves and len(shown) > args.max_curves:
+        order = np.argsort(-np.maximum(table["physics_percentile"].to_numpy()[shown],
+                                       table["instrument_percentile"].to_numpy()[shown]))
+        shown = np.sort(shown[order[:args.max_curves]])
+    chosen = set(int(v) for v in shown)
 
-    # Every candidate is drawn AND carries a curve, so no ringed point is ever
-    # unclickable. Background stars only fill out the shape of the embedding.
-    room = max(args.umap_points - len(candidates), 0)
-    background_shown = rng.permutation(others)[:room]
-    shown = np.sort(np.concatenate([candidates, background_shown]))
-    background_curves = rng.permutation(background_shown)[:args.background]
-    chosen = set(int(v) for v in np.concatenate([candidates, background_curves]))
-    print(f"{len(shown)} points drawn ({len(candidates)} candidates, all clickable) | "
-          f"{len(chosen)} with embedded curves", flush=True)
+    # UMAP is FIT on a wider sample so the embedding keeps the structure you saw in the
+    # static figure, but only candidates are rendered and only candidates are clickable.
+    context = rng.permutation(eligible[~candidate[eligible]])[
+        :max(args.umap_points - len(shown), 0)]
+    fit_index = np.sort(np.concatenate([shown, context]))
+    n_physics = int(physics_hit[shown].sum())
+    n_instrument = int(instrument_hit[shown].sum())
+    n_both = int((physics_hit & instrument_hit)[shown].sum())
+    print(f"{len(shown)} candidates shown and clickable "
+          f"({n_physics} physics, {n_instrument} instrument, {n_both} both); "
+          f"UMAP fit on {len(fit_index)} points", flush=True)
 
     state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     config = state["config"]
@@ -274,8 +273,10 @@ def main():
     import umap
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        coords = np.asarray(umap.UMAP(**UMAP_KWARGS).fit_transform(
-            StandardScaler().fit_transform(latents[shown])))
+        fitted = np.asarray(umap.UMAP(**UMAP_KWARGS).fit_transform(
+            StandardScaler().fit_transform(latents[fit_index])))
+    position = {int(v): fitted[k] for k, v in enumerate(fit_index)}
+    coords = np.stack([position[int(v)] for v in shown])
 
     curve_index = np.asarray(sorted(chosen))
     rows = table["row"].to_numpy()[curve_index]
