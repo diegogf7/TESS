@@ -1,0 +1,82 @@
+{
+  "n_examples": 1000,
+  "splits": {
+    "train": 800,
+    "val": 100,
+    "test": 100
+  },
+  "flows": {
+    "physics": {
+      "best_epoch": 49,
+      "best_train_nll": 236.43836212158203,
+      "best_val_nll": 247.06851196289062,
+      "train_nll_diverging": false,
+      "val_nll_monotonically_worsening": false
+    },
+    "instrument": {
+      "best_epoch": 38,
+      "best_train_nll": 212.20575714111328,
+      "best_val_nll": 163.39471435546875,
+      "train_nll_diverging": false,
+      "val_nll_monotonically_worsening": false
+    }
+  },
+  "test_nll": {
+    "physics": {
+      "median": 238.13656616210938,
+      "q1": 201.69167709350586,
+      "q3": 300.3802261352539
+    },
+    "instrument": {
+      "median": 147.9515380859375,
+      "q1": 98.62597465515137,
+      "q3": 227.23614120483398
+    }
+  },
+  "classification_counts_all": {
+    "typical": 919,
+    "physics": 39,
+    "instrument": 31,
+    "both": 11
+  },
+  "classification_counts_test": {
+    "typical": 95,
+    "physics": 5
+  },
+  "checks": {
+    "all_scores_finite": true,
+    "preprocessing_fit_on_train_only": true,
+    "flows_fit_on_train_only": true,
+    "encoder_decoder_weights_unchanged": true,
+    "model_in_eval_mode": true
+  },
+  "runtime_seconds": 7.8,
+  "top12_test_physics": [
+    {
+      "TIC": 261238874,
+      "physics_percentile": 0.9975,
+      "instrument_percentile": 0.2875
+    },
+    {
+      "TIC": 261259744,
+      "physics_percentile": 0.995,
+      "instrument_percentile": 0.07
+    },
+    {
+      "TIC": 261238869,
+      "physics_percentile": 0.98,
+      "instrument_percentile": 0.36875
+    },
+    {
+      "TIC": 261139530,
+      "physics_percentile": 0.9525,
+      "instrument_percentile": 0.28375
+    },
+    {
+      "TIC": 261238842,
+      "physics_percentile": 0.95,
+      "instrument_percentile": 0.8925
+    }
+  ],
+  "top12_test_instrument": []
+}
