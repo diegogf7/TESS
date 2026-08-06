@@ -252,16 +252,21 @@ def extract_many(paths):
 
 
 # ------------------------------------------------------------ detector positions
-def tess_point_all(gaia_ids, ra, dec):
+def tess_point_all(gaia_ids, ra, dec, sector=None):
     """(gaia_id, sector, camera, ccd, DETECTOR_X, DETECTOR_Y) for every observation.
 
     Same source of truth as src/tglc/merge_detector_positions.py: official TESS CCD
     column/row from tess-point, never the aperture-local STAR_X/STAR_Y.
+
+    `sector` pins tess-point to one sector via trySector. Without it the solver walks
+    every sector for every star and the results are then thrown away -- ~20x the work
+    for the same answer.
     """
     from tess_stars2px import tess_stars2px_function_entry
     index = np.arange(len(gaia_ids))
+    kwargs = {"trySector": int(sector)} if sector is not None else {}
     oid, _, _, sec, cam, ccd, col, row, _ = tess_stars2px_function_entry(
-        index, np.asarray(ra, float), np.asarray(dec, float))
+        index, np.asarray(ra, float), np.asarray(dec, float), **kwargs)
     table = pd.DataFrame({
         "oid": np.asarray(oid, int), "sector": np.asarray(sec, int),
         "camera": np.asarray(cam, int), "ccd": np.asarray(ccd, int),
@@ -339,8 +344,9 @@ def main():
     positions = []
     for sector, group in meta.groupby("sector"):
         table = tess_point_all(group["GAIADR3"].to_numpy(), group["ra"].to_numpy(),
-                               group["dec"].to_numpy())
+                               group["dec"].to_numpy(), sector=int(sector))
         positions.append(table[table["sector"] == int(sector)])
+        print(f"  sector {int(sector)}: {len(table)} positions resolved", flush=True)
     positions = pd.concat(positions, ignore_index=True).drop_duplicates(
         ["GAIADR3", "sector", "camera", "ccd"])
     del meta
