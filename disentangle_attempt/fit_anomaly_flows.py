@@ -53,7 +53,7 @@ THRESHOLD = 0.95
 
 
 # ------------------------------------------------------------------- flow fitting
-def fit_flow(train, val, features, seed, label):
+def fit_flow(train, val, features, seed, label, batch_size=512):
     """Unconditional NSF; validation NLL picks the checkpoint."""
     import zuko
     torch.manual_seed(seed)
@@ -62,7 +62,7 @@ def fit_flow(train, val, features, seed, label):
     optimizer = torch.optim.Adam(flow.parameters(), lr=LR)
     train_t = torch.as_tensor(train, dtype=torch.float32)
     val_t = torch.as_tensor(val, dtype=torch.float32)
-    batch = min(512, len(train_t))
+    batch = min(int(batch_size), len(train_t))
 
     best = {"val_nll": float("inf"), "epoch": -1, "state": None, "train_nll": None}
     history = []
