@@ -1,0 +1,149 @@
+{
+  "checkpoint": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_12px/base_model/best.pt",
+  "config": {
+    "sector": 1,
+    "camera": 4,
+    "ccd": 2,
+    "peer_min_distance_px": 12.0,
+    "n_peers": 8,
+    "curve_length": 1024,
+    "d_model": 128,
+    "seed": 42
+  },
+  "epoch": 8,
+  "anchors": {
+    "train": 320,
+    "val": 40,
+    "test": 40
+  },
+  "hashes_before": {
+    "physics_s4d": "e8c87a4dce989991",
+    "instrument_s4d": "6dab5b23b0a9b5e5",
+    "decoder": "45abdbbdef96059e"
+  },
+  "test3_mask_invariance": {
+    "same_star_cosine": {
+      "median": 0.8088304400444031,
+      "q1": 0.7660409808158875,
+      "q3": 0.8504783511161804
+    },
+    "different_star_cosine": {
+      "median": 0.1841731071472168,
+      "q1": -0.025939831510186195,
+      "q3": 0.4549177885055542
+    },
+    "difference": 0.6246573328971863,
+    "same_tic_retrieval_accuracy": 0.8375
+  },
+  "test5_common_mode_probes": [
+    {
+      "probe": "physics",
+      "test_smooth_l1": 0.19880211353302002,
+      "val_smooth_l1": 0.2465183287858963,
+      "pca_retained_variance": 0.9988003373146057,
+      "median_pearson": 0.794038861989975,
+      "median_spearman": 0.7570182096551753,
+      "median_explained_variance": 0.576062798500061
+    },
+    {
+      "probe": "instrument",
+      "test_smooth_l1": 0.06565945595502853,
+      "val_smooth_l1": 0.04672711342573166,
+      "pca_retained_variance": 0.7871401309967041,
+      "median_pearson": 0.9313564300537109,
+      "median_spearman": 0.9199145452631783,
+      "median_explained_variance": 0.8493059277534485
+    },
+    {
+      "probe": "mean_baseline",
+      "test_smooth_l1": 0.31688058376312256,
+      "val_smooth_l1": NaN,
+      "pca_retained_variance": NaN,
+      "median_pearson": 0.10091164335608482,
+      "median_spearman": 0.10963590862186262,
+      "median_explained_variance": -0.0008356571197509766
+    }
+  ],
+  "test6_injection": {
+    "flare_a0.5": {
+      "physics_cosine_distance": 8.940696716308594e-07,
+      "physics_l2_change": 0.0291984211653471,
+      "instrument_l2_change": 0.0,
+      "corr_delta_vs_injection": 0.19646009802818298,
+      "recovered_amplitude": 0.0012463482562452555
+    },
+    "flare_a1.0": {
+      "physics_cosine_distance": 3.3974647521972656e-06,
+      "physics_l2_change": 0.05762535333633423,
+      "instrument_l2_change": 0.0,
+      "corr_delta_vs_injection": 0.19625598192214966,
+      "recovered_amplitude": 0.0012452277587726712
+    },
+    "sinusoid_a0.5": {
+      "physics_cosine_distance": 0.0649724006652832,
+      "physics_l2_change": 8.367990493774414,
+      "instrument_l2_change": 0.0,
+      "corr_delta_vs_injection": -0.14303162693977356,
+      "recovered_amplitude": -0.033655356615781784
+    },
+    "sinusoid_a1.0": {
+      "physics_cosine_distance": 0.23051238059997559,
+      "physics_l2_change": 16.169767379760742,
+      "instrument_l2_change": 0.0,
+      "corr_delta_vs_injection": -0.15007086098194122,
+      "recovered_amplitude": -0.025888556614518166
+    },
+    "transit_a0.5": {
+      "physics_cosine_distance": 0.003117203712463379,
+      "physics_l2_change": 1.8335645198822021,
+      "instrument_l2_change": 0.0,
+      "corr_delta_vs_injection": 0.32237333059310913,
+      "recovered_amplitude": 0.07704856991767883
+    },
+    "transit_a1.0": {
+      "physics_cosine_distance": 0.012977302074432373,
+      "physics_l2_change": 3.638310432434082,
+      "instrument_l2_change": 0.0,
+      "corr_delta_vs_injection": 0.31868427991867065,
+      "recovered_amplitude": 0.07527956366539001
+    }
+  },
+  "test6_instrument_latent_unchanged": true,
+  "test7_peer_controls": {
+    "actual": 0.2316814810037613,
+    "time_shifted": 0.2492063194513321,
+    "random_same_chip": 0.30361807346343994
+  },
+  "test7_time_shift_cadences": 730,
+  "test8_latent_swap": {
+    "n_pairs": 115,
+    "median_corr_instrument_swap_vs_common_delta": 0.6323539614677429,
+    "median_corr_physics_swap_vs_proxy_delta": 0.632461428642273,
+    "median_instrument_swap_rms": 0.6898176670074463,
+    "median_physics_swap_rms": 1.2146456241607666
+  },
+  "hashes_after": {
+    "physics_s4d": "e8c87a4dce989991",
+    "instrument_s4d": "6dab5b23b0a9b5e5",
+    "decoder": "45abdbbdef96059e"
+  },
+  "weights_unchanged": true,
+  "criteria": {
+    "physics_stable_across_masks": true,
+    "instrument_probe_beats_physics": true,
+    "instrument_probe_beats_baseline": true,
+    "physics_responds_to_injection": true,
+    "instrument_unchanged_by_injection": true,
+    "actual_peers_beat_controls": true,
+    "instrument_swap_follows_common_mode": true,
+    "physics_swap_follows_proxy": true
+  },
+  "verdict": "SUPPORTED",
+  "leakage_summary": {
+    "A_physics_mask_invariance_difference": 0.6246573328971863,
+    "B_instrument_common_mode_pearson": 0.9313564300537109,
+    "C_physics_common_mode_leakage_pearson": 0.794038861989975,
+    "D_physics_injection_l2": 2.5091112852096558,
+    "D_instrument_injection_l2": 0.0
+  }
+}
