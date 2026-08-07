@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 
 from disentangle_attempt.dataset import CrossSectorPatch
 from disentangle_attempt.masking import complementary_masks
-from disentangle_attempt.model import DisentangleModel
+from disentangle_attempt.model import build_model
 from disentangle_attempt.reference_context import load_reference_context
 from disentangle_attempt.train import DEFAULT_PARQUET, pick_device
 
@@ -80,7 +80,7 @@ def dual_context_prediction(model, raw, valid, actual_peers, actual_peer_mask,
     for k in range(masks.shape[0]):
         hidden = masks[k].to(device).unsqueeze(0).expand(B, L)
         tokens = model.encode_physics(raw.masked_fill(hidden, 0.0), valid & ~hidden)
-        latent = tokens.flatten(1)
+        latent = model.physics_vector(raw.masked_fill(hidden, 0.0), valid & ~hidden)
         with_actual = model.decoder(torch.cat([latent, actual_context], dim=-1))
         with_reference = model.decoder(torch.cat([latent, reference_context], dim=-1))
         if stitch:
@@ -201,11 +201,7 @@ def main():
         split_seed=config["seed"], max_eligible_anchors=config.get("max_eligible_anchors"),
         verbose=False)
 
-    model = DisentangleModel(d_model=config.get("d_model", 128),
-                             n_layers=config.get("n_layers", 4), dropout=0.0,
-                             n_peers=config["n_peers"], n_tokens=config["n_tokens"],
-                             token_dim=config["token_dim"],
-                             curve_length=config["curve_length"]).to(device)
+    model = build_model(config).to(device)
     model.load_state_dict(state["model"])
     model.eval()
 

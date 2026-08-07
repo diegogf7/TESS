@@ -27,7 +27,7 @@ from disentangle_attempt.dataset import (CrossSectorAnchorDataset, CrossSectorPa
                                         audit_batch)
 from disentangle_attempt.losses import total_loss, visible_reconstruction
 from disentangle_attempt.masking import mask_views
-from disentangle_attempt.model import DisentangleModel
+from disentangle_attempt.model import build_model
 from disentangle_attempt.reference_context import (build_reference_context,
                                                    save_reference_context)
 
@@ -180,12 +180,7 @@ def main():
     audit_batch(patch, next(iter(DataLoader(datasets["train"], batch_size=batch,
                                             shuffle=True, drop_last=True))))
 
-    model = DisentangleModel(d_model=config.get("d_model", 128),
-                             n_layers=config.get("n_layers", 4),
-                             dropout=config.get("dropout", 0.0),
-                             n_peers=config["n_peers"], n_tokens=config["n_tokens"],
-                             token_dim=config["token_dim"],
-                             curve_length=config["curve_length"]).to(device)
+    model = build_model(config).to(device)
     counts = model.parameter_count()
     print(f"parameters: {counts}", flush=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=float(config["learning_rate"]),

@@ -30,6 +30,17 @@ TOKEN_DIM = 16
 LATENT_SIZE = N_TOKENS * TOKEN_DIM              # 512 per curve
 
 
+def build_model(config):
+    """One construction path, so every script agrees on the bottleneck settings."""
+    return DisentangleModel(
+        d_model=config.get("d_model", 128), n_layers=config.get("n_layers", 4),
+        dropout=config.get("dropout", 0.0), n_peers=config["n_peers"],
+        n_tokens=config["n_tokens"], token_dim=config["token_dim"],
+        curve_length=config["curve_length"],
+        physics_latent_dim=config.get("physics_latent_dim"),
+        peer_latent_dim=config.get("instrument_peer_latent_dim"))
+
+
 def build_encoder(d_model=128, n_layers=4, dropout=0.0, n_tokens=N_TOKENS,
                   token_dim=TOKEN_DIM):
     """n_tokens/token_dim are hard-set here, never inherited from an environment
@@ -62,8 +73,18 @@ class SharedDecoder(nn.Module):
 
 
 class DisentangleModel(nn.Module):
+    """Optional bottlenecks shrink each latent before the decoder.
+
+    physics_latent_dim  projects the flattened physics tokens 512 -> d
+    peer_latent_dim     projects EACH peer 512 -> d with ONE shared Linear, so peers
+                        stay interchangeable and the branch keeps a single set of
+                        instrument weights
+    Both default to None, which reproduces the original 512 / 8x512 model exactly.
+    """
+
     def __init__(self, d_model=128, n_layers=4, dropout=0.0, n_peers=N_PEERS,
-                 n_tokens=N_TOKENS, token_dim=TOKEN_DIM, curve_length=CURVE_LENGTH):
+                 n_tokens=N_TOKENS, token_dim=TOKEN_DIM, curve_length=CURVE_LENGTH,
+                 physics_latent_dim=None, peer_latent_dim=None):
         super().__init__()
         self.n_peers, self.n_tokens, self.token_dim = int(n_peers), int(n_tokens), int(token_dim)
         self.curve_length = int(curve_length)
@@ -71,23 +92,41 @@ class DisentangleModel(nn.Module):
 
         self.physics_encoder = build_encoder(d_model, n_layers, dropout, n_tokens, token_dim)
         self.instrument_encoder = build_encoder(d_model, n_layers, dropout, n_tokens, token_dim)
-        self.decoder = SharedDecoder(self.latent_size * (1 + self.n_peers), self.curve_length)
+
+        self.physics_bottleneck = (nn.Linear(self.latent_size, int(physics_latent_dim))
+                                   if physics_latent_dim else None)
+        self.peer_bottleneck = (nn.Linear(self.latent_size, int(peer_latent_dim))
+                                if peer_latent_dim else None)
+        self.physics_out_dim = int(physics_latent_dim) if physics_latent_dim else self.latent_size
+        self.peer_out_dim = int(peer_latent_dim) if peer_latent_dim else self.latent_size
+        self.instrument_out_dim = self.n_peers * self.peer_out_dim
+        self.decoder = SharedDecoder(self.physics_out_dim + self.instrument_out_dim,
+                                     self.curve_length)
 
     # ------------------------------------------------------------------ branches
     def encode_physics(self, curve, mask):
         """[B, 1024] raw + [B, 1024] mask -> [B, 32, 16] tokens."""
         return self.physics_encoder(curve.unsqueeze(-1), mask)
 
-    def encode_peers(self, peer_raw, peer_mask):
-        """[B, 8, 1024] -> tokens [B, 8, 32, 16] and ordered context [B, 4096].
+    def physics_vector(self, curve, mask):
+        """[B, 1024] -> [B, physics_out_dim], after the optional bottleneck."""
+        flat = self.encode_physics(curve, mask).flatten(1)
+        return self.physics_bottleneck(flat) if self.physics_bottleneck is not None else flat
 
-        Every peer goes through the SAME instrument weights in one flattened call,
-        and the peers stay in nearest-to-farthest order (never averaged)."""
+    def encode_peers(self, peer_raw, peer_mask):
+        """[B, 8, 1024] -> tokens [B, 8, 32, 16] and ordered context [B, instrument_out_dim].
+
+        Every peer goes through the SAME instrument weights and the SAME bottleneck in
+        one flattened call, and the peers stay in nearest-to-farthest order (never
+        averaged)."""
         B, P, L = peer_raw.shape
         tokens = self.instrument_encoder(peer_raw.reshape(B * P, L).unsqueeze(-1),
                                          peer_mask.reshape(B * P, L))
         tokens = tokens.reshape(B, P, self.n_tokens, self.token_dim)
-        return tokens, tokens.reshape(B, P * self.latent_size)
+        per_peer = tokens.reshape(B, P, self.latent_size)
+        if self.peer_bottleneck is not None:
+            per_peer = self.peer_bottleneck(per_peer)          # shared across peers
+        return tokens, per_peer.reshape(B, P * self.peer_out_dim)
 
     @staticmethod
     def global_physics(tokens):
@@ -106,7 +145,9 @@ class DisentangleModel(nn.Module):
         current_physics_tokens = self.encode_physics(masked_anchor_raw, physics_input_mask)
         peer_instrument_tokens, instrument_context = self.encode_peers(peer_raw, peer_mask)
 
-        physics_latent = current_physics_tokens.flatten(1)                      # [B, 512]
+        physics_latent = current_physics_tokens.flatten(1)
+        if self.physics_bottleneck is not None:
+            physics_latent = self.physics_bottleneck(physics_latent)
         decoder_input = torch.cat([physics_latent, instrument_context], dim=-1)  # [B, 4608]
         outputs = {
             "predicted_raw_anchor": self.decoder(decoder_input),                # [B, 1024]
@@ -123,6 +164,10 @@ class DisentangleModel(nn.Module):
     def parameter_count(self):
         groups = {"physics_s4d": self.physics_encoder, "instrument_s4d": self.instrument_encoder,
                   "decoder": self.decoder}
+        if self.physics_bottleneck is not None:
+            groups["physics_bottleneck"] = self.physics_bottleneck
+        if self.peer_bottleneck is not None:
+            groups["peer_bottleneck"] = self.peer_bottleneck
         counts = {k: sum(p.numel() for p in m.parameters()) for k, m in groups.items()}
         counts["total"] = sum(p.numel() for p in self.parameters())
         return counts

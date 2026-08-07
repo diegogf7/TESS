@@ -39,7 +39,7 @@ from disentangle_attempt.dataset import (CrossSectorPatch,
                                         target_from_checkpoint)
 from disentangle_attempt.infer import dual_context_prediction
 from disentangle_attempt.masking import complementary_masks
-from disentangle_attempt.model import DisentangleModel
+from disentangle_attempt.model import build_model
 from disentangle_attempt.reference_context import load_reference_context
 from disentangle_attempt.train import DEFAULT_PARQUET, pick_device
 
@@ -184,11 +184,7 @@ def main():
     anchors_all = patch.split_anchors["test"]
     assert len(anchors_all), "no test anchors"
 
-    model = DisentangleModel(d_model=config.get("d_model", 128),
-                             n_layers=config.get("n_layers", 4), dropout=0.0,
-                             n_peers=config["n_peers"], n_tokens=config["n_tokens"],
-                             token_dim=config["token_dim"],
-                             curve_length=config["curve_length"]).to(device)
+    model = build_model(config).to(device)
     model.load_state_dict(state["model"])
     model.eval()
 

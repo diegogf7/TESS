@@ -43,7 +43,7 @@ from sklearn.preprocessing import StandardScaler
 from disentangle_attempt.dataset import (CrossSectorPatch, infer_require_cross_sector,
                                          target_from_checkpoint)
 from disentangle_attempt.fit_anomaly_flows import THRESHOLD, fit_flow, nll, percentile_against
-from disentangle_attempt.model import DisentangleModel
+from disentangle_attempt.model import build_model
 from disentangle_attempt.plot_latent_umaps import instrument_latents
 from disentangle_attempt.train import DEFAULT_PARQUET, pick_device
 
@@ -138,11 +138,7 @@ def main():
     peer_rows = np.stack([patch.peers[s][0][index_of[s][int(r)]]
                           for r, s in zip(rows, splits)])
 
-    model = DisentangleModel(d_model=config.get("d_model", 128),
-                             n_layers=config.get("n_layers", 4), dropout=0.0,
-                             n_peers=config["n_peers"], n_tokens=config["n_tokens"],
-                             token_dim=config["token_dim"],
-                             curve_length=config["curve_length"]).to(device)
+    model = build_model(config).to(device)
     model.load_state_dict(state["model"])
     model.eval()
 

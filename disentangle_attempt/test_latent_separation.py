@@ -37,7 +37,7 @@ from disentangle_attempt.additive_heads import state_hash
 from disentangle_attempt.dataset import CrossSectorPatch
 from disentangle_attempt.losses import masked_smooth_l1
 from disentangle_attempt.masking import complementary_masks, contiguous_hidden_mask
-from disentangle_attempt.model import DisentangleModel
+from disentangle_attempt.model import build_model
 from disentangle_attempt.train import DEFAULT_PARQUET, pick_device
 
 MIN_VALID_PEERS = 4
@@ -88,16 +88,16 @@ def peer_common_mode(patch, peer_rows):
 @torch.no_grad()
 def extract(model, patch, rows, peer_rows, mask, device, batch=32):
     """Physics latent under ONE fixed mask, plus the concatenated instrument context."""
-    physics = np.zeros((len(rows), model.latent_size), dtype=np.float32)
-    instrument = np.zeros((len(rows), model.n_peers * model.latent_size), dtype=np.float32)
+    physics = np.zeros((len(rows), model.physics_out_dim), dtype=np.float32)
+    instrument = np.zeros((len(rows), model.instrument_out_dim), dtype=np.float32)
     for start in range(0, len(rows), batch):
         chunk = rows[start:start + batch]
         peers = peer_rows[start:start + batch]
         raw = torch.from_numpy(patch.X[chunk]).to(device)
         valid = torch.from_numpy(patch.M[chunk]).to(device)
         hidden = mask.to(device).unsqueeze(0).expand(len(chunk), -1)
-        tokens = model.encode_physics(raw.masked_fill(hidden, 0.0), valid & ~hidden)
-        physics[start:start + len(chunk)] = tokens.flatten(1).cpu().numpy()
+        physics[start:start + len(chunk)] = model.physics_vector(
+            raw.masked_fill(hidden, 0.0), valid & ~hidden).cpu().numpy()
         _, context = model.encode_peers(torch.from_numpy(patch.X[peers]).to(device),
                                         torch.from_numpy(patch.M[peers]).to(device))
         instrument[start:start + len(chunk)] = context.cpu().numpy()
@@ -115,8 +115,8 @@ def mask_invariance(model, patch, rows, device, n_masks=8, hidden_fraction=0.25,
     for _ in range(n_masks):
         hidden = contiguous_hidden_mask(valid.cpu(), hidden_fraction,
                                         generator=generator).to(device)
-        tokens = model.encode_physics(raw.masked_fill(hidden, 0.0), valid & ~hidden)
-        stack.append(tokens.flatten(1).cpu().numpy())
+        stack.append(model.physics_vector(raw.masked_fill(hidden, 0.0),
+                                          valid & ~hidden).cpu().numpy())
     stack = np.stack(stack)                                   # [n_masks, N, 512]
 
     same, records = [], []
@@ -236,11 +236,7 @@ def main():
     assert float(config.get("peer_min_distance_px", -1)) == 12.0, \
         "checkpoint was not trained with the 12 px minimum peer distance"
 
-    model = DisentangleModel(d_model=config.get("d_model", 128),
-                             n_layers=config.get("n_layers", 4), dropout=0.0,
-                             n_peers=config["n_peers"], n_tokens=config["n_tokens"],
-                             token_dim=config["token_dim"],
-                             curve_length=config["curve_length"]).to(device)
+    model = build_model(config).to(device)
     model.load_state_dict(state["model"], strict=True)
     model.eval()
     hashes_before = {"physics_s4d": state_hash(model.physics_encoder),
@@ -274,9 +270,9 @@ def main():
           f"{config['n_peers']}")
     print(f"anchors               train {int((splits=='train').sum())}  "
           f"val {int((splits=='val').sum())}  test {int((splits=='test').sum())}")
-    print(f"physics latent        [{model.latent_size}]")
-    print(f"instrument latent     [{model.n_peers * model.latent_size}] "
-          f"({model.n_peers} x {model.latent_size})")
+    print(f"physics latent        [{model.physics_out_dim}]")
+    print(f"instrument latent     [{model.instrument_out_dim}] "
+          f"({model.n_peers} x {model.peer_out_dim})")
     print(f"checkpoint epoch      {state.get('epoch')}")
     print("=" * 72, flush=True)
 
@@ -401,8 +397,7 @@ def main():
         raw = torch.from_numpy(patch.X[inject_rows]).to(device)
         valid = torch.from_numpy(patch.M[inject_rows]).to(device)
         hidden = masks[0].to(device).unsqueeze(0).expand(len(inject_rows), -1)
-        base_tokens = model.encode_physics(raw.masked_fill(hidden, 0.0), valid & ~hidden)
-        base_physics = base_tokens.flatten(1)
+        base_physics = model.physics_vector(raw.masked_fill(hidden, 0.0), valid & ~hidden)
         _, base_context = model.encode_peers(
             torch.from_numpy(patch.X[inject_peers]).to(device),
             torch.from_numpy(patch.M[inject_peers]).to(device))
@@ -411,8 +406,8 @@ def main():
         for name, signal in signals.items():
             signal_t = torch.from_numpy(signal).to(device)
             injected = raw + signal_t
-            tokens = model.encode_physics(injected.masked_fill(hidden, 0.0), valid & ~hidden)
-            physics_injected = tokens.flatten(1)
+            physics_injected = model.physics_vector(injected.masked_fill(hidden, 0.0),
+                                                    valid & ~hidden)
             # peers untouched -> the instrument context must be bit-identical
             _, context_injected = model.encode_peers(
                 torch.from_numpy(patch.X[inject_peers]).to(device),
@@ -480,8 +475,7 @@ def main():
         raw = torch.from_numpy(patch.X[test_rows]).to(device)
         valid = torch.from_numpy(patch.M[test_rows]).to(device)
         hidden = masks[0].to(device).unsqueeze(0).expand(len(test_rows), -1)
-        physics_latent = model.encode_physics(raw.masked_fill(hidden, 0.0),
-                                              valid & ~hidden).flatten(1)
+        physics_latent = model.physics_vector(raw.masked_fill(hidden, 0.0), valid & ~hidden)
         test_peer_rows = np.stack([patch.peers_for_row(int(r), "test")[0] for r in test_rows])
         shift = int(rng.integers(200, patch.curve_length - 200))
         pool = patch.split_pool["test"][patch.chips[0]]

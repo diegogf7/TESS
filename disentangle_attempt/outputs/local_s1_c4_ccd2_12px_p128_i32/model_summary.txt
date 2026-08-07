@@ -1,0 +1,6 @@
+local_s1_c4_ccd2_12px_p128_i32
+physics: S4D -> [B,512] -> Linear(512,128) -> [B,128]
+instrument: shared S4D -> [B,8,512] -> shared Linear(512,32) -> [B,8,32] -> concat [B,256]
+decoder: Linear(384,1024) -> GELU -> LayerNorm(1024) -> Linear(1024,1024)
+parameters: {'physics_s4d': 202000, 'instrument_s4d': 202000, 'decoder': 1445888, 'physics_bottleneck': 65664, 'peer_bottleneck': 16416, 'total': 1931968}
+best epoch: 8

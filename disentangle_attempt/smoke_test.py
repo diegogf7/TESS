@@ -19,7 +19,7 @@ from disentangle_attempt.dataset import (CrossSectorAnchorDataset, CrossSectorPa
                                         audit_batch)
 from disentangle_attempt.losses import total_loss
 from disentangle_attempt.masking import complementary_masks, mask_views
-from disentangle_attempt.model import DisentangleModel
+from disentangle_attempt.model import build_model
 from disentangle_attempt.train import DEFAULT_PARQUET, forward_batch, load_config, pick_device
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -148,9 +148,7 @@ def check_correction_identity(patch, device):
     """
     from disentangle_attempt.infer import identity_correction_check
     from disentangle_attempt.masking import complementary_masks
-    model = DisentangleModel(d_model=CONFIG["d_model"], n_layers=CONFIG["n_layers"],
-                             dropout=0.0, n_peers=P, n_tokens=T, token_dim=D,
-                             curve_length=L).to(device)
+    model = build_model(CONFIG).to(device)
     model.eval()
     row = int(patch.split_anchors["train"][0])
     peers = patch.peers_for_row(row, "train")[0]
@@ -165,27 +163,25 @@ def check_correction_identity(patch, device):
 
 
 def check_forward_and_gradients(batch, device):
-    model = DisentangleModel(d_model=CONFIG["d_model"], n_layers=CONFIG["n_layers"],
-                             dropout=0.0, n_peers=P, n_tokens=T, token_dim=D,
-                             curve_length=L).to(device)
+    model = build_model(CONFIG).to(device)
     generator = torch.Generator().manual_seed(0)
     loss, parts, outputs = forward_batch(model, batch, CONFIG, generator, device=device)
 
+    # Dimensions follow the model's (optional) bottlenecks rather than being hardcoded.
+    physics_dim, instrument_dim = model.physics_out_dim, model.instrument_out_dim
     expected = {"predicted_raw_anchor": (B, L), "current_physics_tokens": (B, T, D),
                 "current_global_physics": (B, D), "peer_instrument_tokens": (B, P, T, D),
-                "instrument_context": (B, P * T * D), "hidden_mask": (B, L),
-                "decoder_input": (B, (P + 1) * T * D)}
+                "instrument_context": (B, instrument_dim), "hidden_mask": (B, L),
+                "decoder_input": (B, physics_dim + instrument_dim)}
     for key, shape in expected.items():
         assert tuple(outputs[key].shape) == shape, \
             f"{key}: expected {shape}, got {tuple(outputs[key].shape)}"
-    assert outputs["current_physics_latent"].shape == (B, 512), "physics latent must be [batch, 512]"
-    assert outputs["instrument_context"].shape == (B, 4096), "instrument must be [batch, 4096]"
-    assert outputs["decoder_input"].shape == (B, 4608), "decoder input must be [batch, 4608]"
-    assert outputs["predicted_raw_anchor"].shape == (B, 1024), "decoder output must be [batch, 1024]"
+    assert outputs["current_physics_latent"].shape == (B, physics_dim)
+    assert outputs["predicted_raw_anchor"].shape == (B, L)
     assert torch.isfinite(loss) and float(loss.detach()) > 0
-    print(f"  forward OK: physics [B,512], instrument [B,4096], decoder in [B,4608] "
-          f"out [B,1024] (loss {float(loss.detach()):.4f}, "
-          f"recon {parts['reconstruction']:.4f})")
+    print(f"  forward OK: physics [B,{physics_dim}], instrument [B,{instrument_dim}], "
+          f"decoder in [B,{physics_dim + instrument_dim}] out [B,{L}] "
+          f"(loss {float(loss.detach()):.4f}, recon {parts['reconstruction']:.4f})")
 
     loss.backward()
     groups = {"physics_s4d": model.physics_encoder, "instrument_s4d": model.instrument_encoder,
@@ -202,9 +198,7 @@ def check_forward_and_gradients(batch, device):
 
 def tiny_overfit(batches, device, steps=OVERFIT_STEPS):
     """Repeatedly train on 2-4 steps; masked reconstruction must fall substantially."""
-    model = DisentangleModel(d_model=CONFIG["d_model"], n_layers=CONFIG["n_layers"],
-                             dropout=0.0, n_peers=P, n_tokens=T, token_dim=D,
-                             curve_length=L).to(device)
+    model = build_model(CONFIG).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     first, last = None, None
     for step in range(steps):

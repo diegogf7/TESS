@@ -1,0 +1,32 @@
+{
+  "baseline": {
+    "reconstruction": 0.09940293729305268,
+    "total": 0.09940293729305268,
+    "n_loss_cadences": 7450.6,
+    "visible_reconstruction": 0.09223578125238419
+  },
+  "conditions": {
+    "shuffle_physics": {
+      "metrics": {
+        "reconstruction": 0.49612375497817995,
+        "total": 0.49612375497817995,
+        "n_loss_cadences": 7450.6,
+        "visible_reconstruction": 0.6921717166900635
+      },
+      "delta_reconstruction": 0.3967208176851273
+    },
+    "random_peers": {
+      "metrics": {
+        "reconstruction": 0.16036559343338014,
+        "total": 0.16036559343338014,
+        "n_loss_cadences": 7450.6,
+        "visible_reconstruction": 0.13373322933912277
+      },
+      "delta_reconstruction": 0.06096265614032746
+    }
+  },
+  "verdicts": {
+    "physics_branch_used": true,
+    "instrument_branch_used": true
+  }
+}
