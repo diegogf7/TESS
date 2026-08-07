@@ -1,0 +1,46 @@
+{
+  "heads": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_12px/additive_heads_supervised/heads_best.pt",
+  "source_checkpoint": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_12px/base_model/best.pt",
+  "frozen_hashes": {
+    "physics_s4d": "e8c87a4dce989991",
+    "instrument_s4d": "6dab5b23b0a9b5e5",
+    "shared_decoder": "45abdbbdef96059e"
+  },
+  "n_stars": 10,
+  "medians": {
+    "recon_smooth_l1": {
+      "reconstruction_only": 0.17585190385580063,
+      "supervised": 0.14141280949115753
+    },
+    "residual_rms": {
+      "reconstruction_only": 0.6087661683559418,
+      "supervised": 0.542967826128006
+    },
+    "corr_correction_common": {
+      "reconstruction_only": 0.7071395516395569,
+      "supervised": 0.9209756851196289
+    },
+    "corr_physics_common": {
+      "reconstruction_only": 0.2818169444799423,
+      "supervised": 0.4330352395772934
+    },
+    "rms_physics_minus_cleaned": {
+      "reconstruction_only": 0.6087661683559418,
+      "supervised": 0.542967826128006
+    },
+    "physics_rms": {
+      "reconstruction_only": 0.8977552056312561,
+      "supervised": 0.5558772683143616
+    },
+    "instrument_rms": {
+      "reconstruction_only": 0.5662494003772736,
+      "supervised": 0.7948083281517029
+    }
+  },
+  "verdict": {
+    "correction_common_correlation_up": true,
+    "physics_common_correlation_down": false,
+    "reconstruction_within_10pct": true,
+    "promising": false
+  }
+}

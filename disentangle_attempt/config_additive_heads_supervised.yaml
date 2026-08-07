@@ -1,0 +1,20 @@
+# Two additive heads on frozen encoders, with the instrument head SUPERVISED by the
+# eight-peer common mode and the physics head penalised for correlating with it.
+# Separate from the reconstruction-only run: nothing here overwrites that experiment.
+seed: 42
+anchors_per_step: 32
+n_masks: 4                       # the same complementary masks used at inference
+
+instrument_weight: 0.25          # L_instrument: correction -> peer common mode
+leakage_weight: 0.05             # L_leakage: physics correlation with the common mode
+
+max_train_steps_per_epoch: 40
+max_val_steps_per_epoch: 20
+max_epochs: 30
+early_stopping_patience: 5
+max_runtime_minutes: 40
+
+learning_rate: 0.001
+weight_decay: 0.0001
+gradient_clip: 1.0
+device: auto

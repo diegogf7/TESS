@@ -1,0 +1,88 @@
+{
+  "source_checkpoint": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_12px/base_model/best.pt",
+  "source_config": {
+    "seed": 42,
+    "curve_length": 1024,
+    "anchors_per_step": 32,
+    "n_peers": 8,
+    "peer_min_distance_px": 12.0,
+    "n_tokens": 32,
+    "token_dim": 16,
+    "hidden_fraction": 0.25,
+    "mask_style": "contiguous_windows",
+    "sector": 1,
+    "camera": 4,
+    "ccd": 2,
+    "max_eligible_anchors": 400,
+    "min_valid_fraction": 0.5,
+    "min_chip_anchors": 64,
+    "d_model": 128,
+    "n_layers": 4,
+    "dropout": 0.0,
+    "max_train_steps_per_epoch": 40,
+    "max_val_steps_per_epoch": 20,
+    "max_epochs": 20,
+    "early_stopping_patience": 4,
+    "max_runtime_minutes": 45,
+    "optimizer": "adamw",
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "mixed_precision": true,
+    "num_workers": 0,
+    "device": "auto"
+  },
+  "config": {
+    "seed": 42,
+    "anchors_per_step": 32,
+    "n_masks": 4,
+    "instrument_weight": 0.25,
+    "leakage_weight": 0.05,
+    "max_train_steps_per_epoch": 40,
+    "max_val_steps_per_epoch": 20,
+    "max_epochs": 30,
+    "early_stopping_patience": 5,
+    "max_runtime_minutes": 40,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "gradient_clip": 1.0,
+    "device": "auto"
+  },
+  "anchors": {
+    "train": 320,
+    "val": 40,
+    "test": 40
+  },
+  "best_epoch": 0,
+  "best_train": {
+    "total": 0.21872847988270222,
+    "recon": 0.15575769504066556,
+    "instrument": 0.16314080874435605,
+    "leakage": 0.44371167048957433
+  },
+  "best_val": {
+    "total": 0.2407505266368389,
+    "recon": 0.19830800518393515,
+    "instrument": 0.09497405653819442,
+    "leakage": 0.37398011442273854
+  },
+  "test": {
+    "total": 0.2311088778078556,
+    "recon": 0.18244304340332745,
+    "instrument": 0.12671991074457764,
+    "leakage": 0.3397171515971422
+  },
+  "stop_reason": "early_stopping",
+  "frozen_hashes_before": {
+    "physics_s4d": "e8c87a4dce989991",
+    "instrument_s4d": "6dab5b23b0a9b5e5",
+    "shared_decoder": "45abdbbdef96059e"
+  },
+  "frozen_hashes_after": {
+    "physics_s4d": "e8c87a4dce989991",
+    "instrument_s4d": "6dab5b23b0a9b5e5",
+    "shared_decoder": "45abdbbdef96059e"
+  },
+  "frozen_unchanged": true,
+  "runtime_minutes": 2.02
+}

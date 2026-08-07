@@ -78,19 +78,22 @@ class AdditiveHeadsModel(nn.Module):
             token_dim=config["token_dim"], curve_length=config["curve_length"])
         source.load_state_dict(state["model"])
 
-        # The shared decoder is deliberately dropped: only the two encoders come across.
+        # The shared decoder is loaded but FROZEN and never called: keeping it lets the
+        # experiment prove it was not used, rather than merely assert it.
         self.physics_encoder = source.physics_encoder
         self.instrument_encoder = source.instrument_encoder
+        self.frozen_decoder = source.decoder
         self.source_config = config
         self.curve_length = int(config["curve_length"])
         self.n_peers = int(config["n_peers"])
         self.latent_size = int(config["n_tokens"]) * int(config["token_dim"])
 
-        for encoder in (self.physics_encoder, self.instrument_encoder):
-            encoder.eval()
-            encoder.requires_grad_(False)
+        for module in (self.physics_encoder, self.instrument_encoder, self.frozen_decoder):
+            module.eval()
+            module.requires_grad_(False)
         self.frozen_hashes = {"physics_s4d": state_hash(self.physics_encoder),
-                              "instrument_s4d": state_hash(self.instrument_encoder)}
+                              "instrument_s4d": state_hash(self.instrument_encoder),
+                              "shared_decoder": state_hash(self.frozen_decoder)}
 
         self.physics_head = PhysicsHead(self.latent_size, HEAD_HIDDEN, self.curve_length)
         self.instrument_head = InstrumentHead(self.n_peers * self.latent_size,
@@ -101,14 +104,20 @@ class AdditiveHeadsModel(nn.Module):
         super().train(mode)
         self.physics_encoder.eval()
         self.instrument_encoder.eval()
+        self.frozen_decoder.eval()
         return self
 
     def trainable_parameters(self):
         return list(self.physics_head.parameters()) + list(self.instrument_head.parameters())
 
-    def encoders_unchanged(self):
-        return {name: state_hash(getattr(self, name.replace("_s4d", "_encoder")))
-                == value for name, value in self.frozen_hashes.items()}
+    def current_hashes(self):
+        return {"physics_s4d": state_hash(self.physics_encoder),
+                "instrument_s4d": state_hash(self.instrument_encoder),
+                "shared_decoder": state_hash(self.frozen_decoder)}
+
+    def frozen_unchanged(self):
+        current = self.current_hashes()
+        return all(current[k] == v for k, v in self.frozen_hashes.items()), current
 
     # ------------------------------------------------------------------ encoding
     @torch.no_grad()
