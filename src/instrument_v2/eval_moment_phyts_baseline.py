@@ -84,7 +84,8 @@ TGLC_PATH = os.environ.get(
 # transitively by the protocol imports below, so exporting ARM=both would abort the
 # process before main() ever runs.
 MOMENT_ARM = os.environ.get("MOMENT_ARM", "all")
-_ARMS = ("jepa", "moment", "twodecoder", "twodecoder_random")
+_ARMS = ("jepa", "moment", "twodecoder", "twodecoder_random",
+         "twodecoder_instrument", "twodecoder_concat")
 assert MOMENT_ARM in _ARMS + ("both", "all"), MOMENT_ARM
 
 
@@ -127,6 +128,8 @@ def build_cohort():
     tglc_cols = set(pq.read_schema(TGLC_PATH).names)
     flux_col = "aperture_flux" if "aperture_flux" in tglc_cols else "flux"
     want = ["TIC", "sector", "GAIADR3", "time", flux_col, "TESS_flags", "TGLC_flags"]
+    # ra/dec feed tess-point for the peer-based arms; absent is fine unless they run.
+    want += [c for c in ("ra", "dec") if c in tglc_cols]
     tglc = pd.read_parquet(TGLC_PATH, columns=want)
     tglc["TIC"] = tglc["TIC"].astype(str)
     tglc = tglc.rename(columns={flux_col: "aperture_flux"})
@@ -328,6 +331,96 @@ def encode_twodecoder(X: np.ndarray, M: np.ndarray) -> np.ndarray:
     return latents
 
 
+def _cohort_peers(matched):
+    """Eight same-chip peers per anchor, using the trained spread rule where possible.
+
+    Detector positions come from tess-point on the cohort's RA/Dec for sector 14.
+    Anchors whose chip pool cannot satisfy the two-band rule fall back to the eight
+    nearest different-TIC stars on the same chip; the counts are reported so the mix
+    is visible rather than silent.
+    """
+    from disentangle_attempt.fetch_data import tess_point_all
+    from disentangle_attempt.spread_geometry import SpreadPeerSelector
+
+    gaia = matched["GAIADR3"].to_numpy(np.int64)
+    positions = tess_point_all(
+        gaia, matched["ra"].to_numpy(float), matched["dec"].to_numpy(float), sector=14
+    ).drop_duplicates("GAIADR3").set_index("GAIADR3")
+    keep = np.array([g in positions.index for g in gaia])
+    if keep.sum() < len(gaia):
+        print(f"  tess-point resolved {keep.sum()}/{len(gaia)} positions", flush=True)
+    det_x = np.full(len(gaia), np.nan)
+    det_y = np.full(len(gaia), np.nan)
+    chip = np.full(len(gaia), -1, dtype=np.int64)
+    for i, g in enumerate(gaia):
+        if not keep[i]:
+            continue
+        row = positions.loc[g]
+        det_x[i] = float(row["DETECTOR_X"])
+        det_y[i] = float(row["DETECTOR_Y"])
+        chip[i] = int(row["camera"]) * 10 + int(row["ccd"])
+
+    tic = matched["TIC"].to_numpy().astype(str)
+    tic_int = np.array([int(t) for t in tic], dtype=np.int64)
+    selector = SpreadPeerSelector(det_x, det_y, tic, tic_int,
+                                  outer_expansion_radii=(1024.0, 1536.0, 2048.0, 3072.0))
+
+    peers = np.full((len(gaia), 8), -1, dtype=np.int64)
+    spread = nearest = failed = 0
+    for code in sorted(set(chip.tolist()) - {-1}):
+        pool = np.flatnonzero(chip == code).astype(np.int64)
+        if len(pool) < 9:
+            continue
+        for anchor in pool:
+            rows, _ = selector.select_for_anchor(int(anchor), pool)
+            if rows is not None:
+                peers[anchor] = rows
+                spread += 1
+                continue
+            other = pool[(pool != anchor) & (tic[pool] != tic[anchor])]
+            if len(other) < 8:
+                failed += 1
+                continue
+            distance = np.hypot(det_x[other] - det_x[anchor], det_y[other] - det_y[anchor])
+            peers[anchor] = other[np.argsort(distance)[:8]]
+            nearest += 1
+    failed += int((peers[:, 0] < 0).sum()) - failed
+    print(f"  peers: {spread} by spread rule, {nearest} nearest-8 fallback, "
+          f"{int((peers[:,0] < 0).sum())} without peers", flush=True)
+    return peers
+
+
+def _twodecoder_latents(X, M, peers):
+    """physics_latent, instrument_context and their concatenation, one frozen pass."""
+    from disentangle_attempt.twodecoder_spread_model import build_twodecoder_model
+
+    checkpoint = torch.load(TWODECODER_CKPT, map_location=DEVICE, weights_only=False)
+    model = build_twodecoder_model(checkpoint["config"]).to(DEVICE)
+    model.load_state_dict(checkpoint["model_state"], strict=True)
+    _freeze(model)
+
+    usable = peers[:, 0] >= 0
+    physics_out, instrument_out = [], []
+    with torch.no_grad():
+        for start in range(0, len(X), BATCH):
+            stop = min(start + BATCH, len(X))
+            flux = torch.tensor(X[start:stop], dtype=torch.float32, device=DEVICE)
+            valid = torch.tensor(M[start:stop] > 0.5, dtype=torch.bool, device=DEVICE)
+            _, latent = model.encode_physics(flux, valid)
+            physics_out.append(latent.float().cpu().numpy())
+
+            rows = peers[start:stop].copy()
+            rows[rows < 0] = 0                      # placeholder; masked out below
+            peer_flux = torch.tensor(X[rows], dtype=torch.float32, device=DEVICE)
+            peer_valid = torch.tensor(M[rows] > 0.5, dtype=torch.bool, device=DEVICE)
+            _, _, context = model.encode_instrument(peer_flux, peer_valid)
+            instrument_out.append(context.float().cpu().numpy())
+    physics = np.concatenate(physics_out)
+    instrument = np.concatenate(instrument_out)
+    instrument[~usable] = 0.0
+    return physics, instrument, np.concatenate([physics, instrument], axis=1), usable
+
+
 def main() -> None:
     os.makedirs(OUT_DIR, exist_ok=True)
     matched, tics, y = build_cohort()
@@ -353,6 +446,14 @@ def main() -> None:
         arms["moment"] = encode_moment(X, M)
     if _wants("twodecoder"):
         arms["twodecoder"] = encode_twodecoder(X, M)
+    if _wants("twodecoder_instrument") or _wants("twodecoder_concat"):
+        peers = _cohort_peers(matched)
+        physics, instrument, concat, usable = _twodecoder_latents(X, M, peers)
+        print(f"  peer-based arms cover {int(usable.sum())}/{len(usable)} anchors", flush=True)
+        if _wants("twodecoder_instrument"):
+            arms["twodecoder_instrument"] = instrument
+        if _wants("twodecoder_concat"):
+            arms["twodecoder_concat"] = concat
     if _wants("twodecoder_random"):
         arms["twodecoder_random"] = encode_twodecoder_random(X, M)
 
