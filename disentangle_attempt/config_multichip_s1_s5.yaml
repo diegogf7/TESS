@@ -1,0 +1,89 @@
+# The completed Sector-1 / camera-4 / CCD-2 two-decoder experiment, scaled to every
+# chip of sectors 1-5: 5 sectors x 4 cameras x 4 CCDs = 80 chips.
+#
+# The model, the flux contract, the masking, the loss and the peer rule are unchanged
+# from config_local_twodecoder_spread.yaml.  Only the amount of data changes, plus the
+# schedule needed to see it.
+run_name: multichip_s1_s5_twodecoder_p64_i4_spread
+output_dir: disentangle_attempt/outputs/multichip_s1_s5_twodecoder_p64_i4_spread
+parquet: disentangle_attempt/data_multichip/cross_sector_raw.parquet
+seed: 42
+
+sectors: [1, 2, 3, 4, 5]
+curve_length: 1024
+n_peers: 8
+n_tokens: 32
+token_dim: 16
+hidden_fraction: 0.25
+mask_style: contiguous_windows
+min_valid_fraction: 0.5
+
+# 400 anchor candidates per chip, split ~80/10/10 by the TIC hash, reproduces the
+# original 320/40/40 per chip.  Over 80 chips that is ~25600/3200/3200.
+anchors_per_chip: 400
+min_chip_pool: 64
+split_method: sha256_tic_80_10_10
+
+# ---- unchanged peer rule ----------------------------------------------------
+# Slots 1-4 in the half-open inner band, slots 5-8 in the inclusive outer band.
+# The minimum peer-to-peer separation relaxes only in the listed order, and only
+# after that whole ladder may the outer upper boundary expand.
+peer_selection: spread_two_band
+peer_distance_bands_px:
+  - [128.0, 384.0]
+  - [384.0, 768.0]
+peer_distance_band_upper_inclusive: [false, true]
+peers_per_distance_band: 4
+minimum_peer_separation_tiers_px: [256.0, 192.0, 128.0]
+outer_expansion_radii_px: [1024.0, 1536.0, 2048.0, 3072.0]
+prefer_angular_coverage: true
+deterministic_farthest_point: true
+exact_search_node_budget: 1000000
+
+# ---- unchanged architecture -------------------------------------------------
+physics_latent_dim: 64
+instrument_token_dim: 4
+instrument_context_dim: 32
+d_model: 128
+n_layers: 4
+dropout: 0.0
+
+# ---- schedule ---------------------------------------------------------------
+# The single-chip run saw 320 anchors for 40 steps x 32 anchors per epoch.  With ~80x
+# the anchors, an epoch is defined as a fixed number of steps rather than a pass, so
+# epochs stay comparable in length and validation stays frequent.
+anchors_per_step: 32
+max_train_steps_per_epoch: 800
+max_epochs: 60
+early_stopping_patience: 8
+max_runtime_minutes: 900
+
+optimizer: adamw
+learning_rate: 0.0003
+weight_decay: 0.0001
+scheduler: constant
+gradient_clip: 1.0
+mixed_precision: true
+num_workers: 4
+device: auto
+geometry_workers: 32
+
+# Fixed-mask eight-anchor gate.  A fresh model is used and discarded before the
+# full seed-42 model is initialized.
+tiny_overfit_anchors: 8
+tiny_overfit_max_steps: 160
+tiny_overfit_min_steps: 30
+tiny_overfit_target_ratio: 0.60
+
+# Evaluation-only collapse diagnostics; these never enter the objective.
+collapse_rms_threshold: 0.00001
+collapse_variation_threshold: 0.00001
+collapse_patience_epochs: 3
+complementary_mask_count: 4
+complementary_mask_block: 64
+heldout_plot_count: 12
+# Full-split evaluation over ~3200 test anchors is expensive; cap the per-epoch
+# validation subset so epochs stay short, then score everything once at the end.
+max_val_anchors_per_epoch: 1024
+
+refuse_existing_training_artifacts: true
