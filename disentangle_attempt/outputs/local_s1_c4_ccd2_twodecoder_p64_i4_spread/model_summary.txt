@@ -1,0 +1,17 @@
+local_s1_c4_ccd2_twodecoder_p64_i4_spread
+physics route: masked raw anchor [B,1024] -> independent physics S4D [B,32,16] -> flatten [B,512] -> Linear(512,64)
+physics decoder: Linear(64,256) -> GELU -> Linear(256,512) -> GELU -> Linear(512,1024)
+instrument route: each of 8 peers makes a separate call through one shared instrument S4D and one shared Linear(512,4)
+peer tokens: [B,8,4], no pooling; deterministic audited slot-order concat to instrument context [B,32]
+instrument decoder: independent Linear(32,256) -> GELU -> Linear(256,512) -> GELU -> Linear(512,1024)
+physics_curve = physics_decoder(physics_latent)
+instrument_correction = instrument_decoder(instrument_context)
+reconstructed_raw = physics_curve + instrument_correction
+cleaned_curve = raw_anchor - instrument_correction
+residual = raw_anchor - reconstructed_raw
+training loss: reconstructed_raw only, masked Smooth-L1 on hidden-valid anchor cadences
+No peer statistic, constructed correction/cleaned target, reference curve, or post-processing correction is used.
+Interpretation warning: reconstruction-only additive branches are not physically identified; names describe the constrained information routes, not proven physical components.
+parameters: {'physics_s4d': 202000, 'instrument_s4d': 202000, 'physics_projection': 32832, 'instrument_projection': 2052, 'physics_decoder': 673536, 'instrument_decoder': 665344, 'total': 1777764}
+best epoch: 12
+best validation masked Smooth-L1: 0.169486028

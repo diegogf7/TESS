@@ -1,0 +1,200 @@
+{
+  "run_name": "local_s1_c4_ccd2_twodecoder_p64_i4_spread",
+  "status": "COMPLETE",
+  "device": "mps",
+  "mixed_precision": false,
+  "geometry_feasible": true,
+  "geometry": {
+    "selected_anchor_counts": {
+      "train": 320,
+      "val": 40,
+      "test": 40
+    },
+    "fallback_counts": {
+      "strict_256": 382,
+      "relaxed_192": 18,
+      "relaxed_128": 0,
+      "outer_expansion": 0,
+      "excluded": 0
+    },
+    "anchor_to_peer_distance_pixels": {
+      "minimum": 128.07351265387075,
+      "p10": 156.148473974155,
+      "p25": 290.1691075761019,
+      "median": 384.39747749473224,
+      "p75": 750.91930012531,
+      "p90": 762.4932214588501,
+      "maximum": 767.9780130119594,
+      "count": 3200
+    },
+    "peer_to_peer_distance_pixels": {
+      "minimum": 192.6589874094078,
+      "p10": 322.0506059458817,
+      "p25": 412.2943917521778,
+      "median": 553.6329187148186,
+      "p75": 784.8983191274172,
+      "p90": 911.3898150572086,
+      "maximum": 1313.2913973734928,
+      "count": 11200
+    },
+    "unique_selected_peer_TICs": 733,
+    "fallback_and_partition_audits": {
+      "peer_selection_attempts": {
+        "rows": 418,
+        "sha256": "c9b36d3be467916042171a97951dbe2441be9dde86e9808dbd2f165fcfda8607",
+        "path": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_twodecoder_p64_i4_spread/peer_selection_attempts.csv"
+      },
+      "peer_pool_assignment": {
+        "rows": 9988,
+        "sha256": "8ff7fc696533932568e097ae9168e61bd3a6d8e091ecad08fb5468ef7ac3b52a",
+        "path": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_twodecoder_p64_i4_spread/peer_pool_assignment.csv"
+      },
+      "supplemental_ingestion_audit": {
+        "rows": 8000,
+        "sha256": "4630783560266da215b575f0795a43f9dc22f3f22b164dc76282892ed87a46df",
+        "path": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_twodecoder_p64_i4_spread/supplemental_ingestion_audit.csv"
+      },
+      "terminal_attempt_spacing_tier_counts": {
+        "192": 18,
+        "256": 382
+      },
+      "terminal_attempt_expansion_count": 0
+    }
+  },
+  "parameters": {
+    "physics_s4d": 202000,
+    "instrument_s4d": 202000,
+    "physics_projection": 32832,
+    "instrument_projection": 2052,
+    "physics_decoder": 673536,
+    "instrument_decoder": 665344,
+    "total": 1777764
+  },
+  "best_epoch": 12,
+  "best_validation_masked_smooth_l1": 0.16948602834890125,
+  "final_full_split_evaluation": {
+    "train": {
+      "physics_output_rms": 1.2192081212997437,
+      "instrument_output_rms": 0.3191497325897217,
+      "reconstructed_output_rms": 1.3260031938552856,
+      "residual_rms": 0.37738728523254395,
+      "physics_across_anchor_variation": 1.1709870100021362,
+      "instrument_across_anchor_variation": 0.3083285391330719,
+      "physics_temporal_variation": 1.1967109441757202,
+      "instrument_temporal_variation": 0.30134469270706177,
+      "branch_cosine": 0.2183951735496521,
+      "cancellation_ratio": 0.8619601677871774,
+      "masked_smooth_l1": 0.06558246320487257,
+      "hidden_valid_cadences": 87795
+    },
+    "validation": {
+      "physics_output_rms": 1.127596139907837,
+      "instrument_output_rms": 0.292570561170578,
+      "reconstructed_output_rms": 1.1712487936019897,
+      "residual_rms": 0.6210026144981384,
+      "physics_across_anchor_variation": 1.0679805278778076,
+      "instrument_across_anchor_variation": 0.25381606817245483,
+      "physics_temporal_variation": 1.1079084873199463,
+      "instrument_temporal_variation": 0.2808832824230194,
+      "branch_cosine": 0.022359810769557953,
+      "cancellation_ratio": 0.8247262752412041,
+      "masked_smooth_l1": 0.1949433916944573,
+      "hidden_valid_cadences": 10932
+    },
+    "test": {
+      "physics_output_rms": 1.1390039920806885,
+      "instrument_output_rms": 0.28467974066734314,
+      "reconstructed_output_rms": 1.1877392530441284,
+      "residual_rms": 0.5527570843696594,
+      "physics_across_anchor_variation": 1.0688577890396118,
+      "instrument_across_anchor_variation": 0.26328539848327637,
+      "physics_temporal_variation": 1.1170417070388794,
+      "instrument_temporal_variation": 0.27304863929748535,
+      "branch_cosine": 0.04988691955804825,
+      "cancellation_ratio": 0.8342718440362615,
+      "masked_smooth_l1": 0.13183625649401257,
+      "hidden_valid_cadences": 10893
+    },
+    "test_evaluation_count_after_checkpoint_selection": 1
+  },
+  "training": {
+    "last_epoch": 17,
+    "seconds": 859.3854489326477,
+    "minutes": 14.323090815544129,
+    "stop_reason": "early_stopping",
+    "learning_rate_schedule": "constant",
+    "meaningful_nonzero_gradients_both_branches": true,
+    "tiny_overfit": {
+      "status": "PASS",
+      "anchors": 8,
+      "fixed_mask": true,
+      "hidden_valid_cadences": 2191,
+      "initial_loss": 0.4452454149723053,
+      "best_loss": 0.059465888887643814,
+      "best_to_initial_ratio": 0.13355755475065959,
+      "required_ratio": 0.6,
+      "minimum_steps": 30,
+      "maximum_steps": 160,
+      "passed_at_step": 30,
+      "seconds": 16.69828510284424,
+      "trace": [
+        {
+          "step": 0,
+          "loss": 0.4452454149723053,
+          "ratio": 1.0
+        },
+        {
+          "step": 1,
+          "loss": 0.4452454149723053,
+          "ratio": 1.0
+        },
+        {
+          "step": 10,
+          "loss": 0.24163378775119781,
+          "ratio": 0.5426979809915116
+        },
+        {
+          "step": 20,
+          "loss": 0.11760606616735458,
+          "ratio": 0.2641376243586243
+        },
+        {
+          "step": 30,
+          "loss": 0.059465888887643814,
+          "ratio": 0.13355755475065959
+        }
+      ]
+    }
+  },
+  "collapse_diagnostics": {
+    "final_validation_flags": {
+      "physics": false,
+      "instrument": false
+    },
+    "sustained_collapse_stop": false,
+    "either_output_branch_collapsed": false,
+    "thresholds": {
+      "rms": 1e-05,
+      "variation": 1e-05,
+      "patience_epochs": 3
+    }
+  },
+  "heldout_full_curve_inference": {
+    "method": "four deterministic complementary masks; physics predictions are retained only where hidden; instrument correction decoded once",
+    "plot_count": 12,
+    "arrays": "/Users/diegogonzalez/TESS/disentangle_attempt/outputs/local_s1_c4_ccd2_twodecoder_p64_i4_spread/heldout_full_curve_arrays.npz"
+  },
+  "output_contract": {
+    "physics_curve": "physics_decoder(physics_latent)",
+    "instrument_correction": "instrument_decoder(instrument_context)",
+    "reconstructed_raw": "physics_curve + instrument_correction",
+    "cleaned_curve": "raw_anchor - instrument_correction",
+    "residual": "raw_anchor - reconstructed_raw",
+    "only_training_prediction": "reconstructed_raw"
+  },
+  "identifiability": {
+    "physically_proven_components": false,
+    "statement": "These are learned additive components under asymmetric information routing. Reconstruction alone does not physically identify the decomposition; injection and peer-control tests remain future work."
+  },
+  "ready_for_later_injection_and_peer_control_evaluation": true
+}
