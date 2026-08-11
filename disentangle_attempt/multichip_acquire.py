@@ -357,10 +357,21 @@ def _session(pool_size: int):
         return session
 
 
+def local_fits_path(fits_dir: Path, sector: int, camera: int, ccd: int, rel: str) -> Path:
+    """Flat per-chip layout: ``fits/<chip>/<filename>``.
+
+    TGLC's own path is ``s0001/cam4-ccd2/0046/2961/9538/4089/<file>``, where the four
+    nested directories come from the Gaia id.  A uniform sample of a chip shares almost
+    no prefixes, so mirroring that tree costs ~5 inodes per light curve -- 240k files
+    would need ~1.2M inodes and blow a 1M file quota long before running out of space.
+    One directory per chip costs ~1 inode per file instead.
+    """
+    return fits_dir / chip_name(sector, camera, ccd) / Path(rel).name
+
+
 def download_one(
-    rel: str, fits_dir: Path, timeout: int, retries: int, pool_size: int = 16
+    rel: str, local: Path, timeout: int, retries: int, pool_size: int = 16
 ) -> DownloadResult:
-    local = fits_dir / rel
     if local.is_file() and local.stat().st_size >= MIN_FITS_BYTES:
         return DownloadResult(rel, str(local), "cached")
     local.parent.mkdir(parents=True, exist_ok=True)
@@ -392,6 +403,29 @@ def download_one(
     return DownloadResult(rel, "", "failed")
 
 
+def purge_chip_fits(data_dir: Path, sector: int, camera: int, ccd: int) -> int:
+    """Delete one chip's FITS once its parquet chunk exists.  Returns files removed."""
+    chunk = data_dir / "chunks" / f"{chip_name(sector, camera, ccd)}.parquet"
+    if not chunk.is_file():
+        raise RuntimeError(
+            f"refusing to purge {chip_name(sector, camera, ccd)} FITS: "
+            f"no parquet chunk at {chunk}"
+        )
+    directory = data_dir / "fits" / chip_name(sector, camera, ccd)
+    if not directory.is_dir():
+        return 0
+    removed = 0
+    for path in directory.rglob("*"):
+        if path.is_file():
+            path.unlink()
+            removed += 1
+    for path in sorted(directory.rglob("*"), reverse=True):
+        if path.is_dir():
+            path.rmdir()
+    directory.rmdir()
+    return removed
+
+
 def download_chip(
     data_dir: Path,
     sector: int,
@@ -400,6 +434,7 @@ def download_chip(
     workers: int,
     timeout: int = 60,
     retries: int = 3,
+    purge_fits: bool = False,
 ) -> dict[str, object]:
     name = chip_name(sector, camera, ccd)
     marker = data_dir / "download" / f"{name}.json"
@@ -411,7 +446,14 @@ def download_chip(
     tally = {"cached": 0, "downloaded": 0, "absent": 0, "failed": 0}
     with ThreadPoolExecutor(workers) as pool:
         futures = [
-            pool.submit(download_one, rel, fits_dir, timeout, retries, workers)
+            pool.submit(
+                download_one,
+                rel,
+                local_fits_path(fits_dir, sector, camera, ccd, rel),
+                timeout,
+                retries,
+                workers,
+            )
             for rel in selection["rel_path"]
         ]
         for future in as_completed(futures):
@@ -432,11 +474,19 @@ def download_chip(
     # and reused, so a retry costs only the missing ones.
     if tally["failed"] == 0:
         atomic_write_json(marker, summary)
+    note = "" if tally["failed"] == 0 else "  [incomplete: re-run to retry]"
+    # Extract and delete this chip's FITS before moving on.  Holding all 80 chips of
+    # raw FITS at once is what exhausts a file-count quota; one chip at a time is
+    # ~3000 inodes, and re-downloading a chip costs only a few seconds.
+    if purge_fits and tally["failed"] == 0:
+        extract_chip(data_dir, sector, camera, ccd, workers)
+        removed = purge_chip_fits(data_dir, sector, camera, ccd)
+        summary["purged_fits"] = removed
+        note += f"  [extracted, {removed:,} FITS purged]"
     print(
         f"{name}: {retrieved:,}/{len(selection):,} retrieved "
         f"({tally['absent']} absent, {tally['failed']} failed) "
-        f"in {summary['seconds']:.0f}s"
-        + ("" if tally["failed"] == 0 else "  [incomplete: re-run to retry]"),
+        f"in {summary['seconds']:.0f}s" + note,
         flush=True,
     )
     return summary
@@ -452,9 +502,12 @@ def extract_chip(data_dir: Path, sector: int, camera: int, ccd: int, workers: in
     selection = pd.read_csv(data_dir / "selection" / f"{name}.csv")
     fits_dir = data_dir / "fits"
     paths = [
-        str(fits_dir / rel)
-        for rel in selection["rel_path"]
-        if (fits_dir / rel).is_file()
+        str(path)
+        for path in (
+            local_fits_path(fits_dir, sector, camera, ccd, rel)
+            for rel in selection["rel_path"]
+        )
+        if path.is_file()
     ]
     if not paths:
         print(f"{name}: no FITS on disk, skipping", flush=True)
@@ -621,6 +674,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=32)
     parser.add_argument("--seed", type=int, default=SEED)
     parser.add_argument(
+        "--purge-fits",
+        action="store_true",
+        help="extract each chip right after downloading it and delete its FITS, "
+             "so only one chip of raw files exists at a time (file-quota safety)",
+    )
+    parser.add_argument(
         "--stage",
         default="all",
         choices=("all", "index", "select", "download", "extract", "positions", "coverage"),
@@ -657,7 +716,10 @@ def main(argv: list[str] | None = None) -> None:
     if "download" in stages:
         print(f"=== stage download: {len(chips)} chips ===", flush=True)
         for sector, camera, ccd in chips:
-            download_chip(data_dir, sector, camera, ccd, args.workers)
+            download_chip(
+                data_dir, sector, camera, ccd, args.workers,
+                purge_fits=args.purge_fits,
+            )
     if "extract" in stages:
         print(f"=== stage extract: {len(chips)} chips ===", flush=True)
         for sector, camera, ccd in chips:

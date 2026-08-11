@@ -33,12 +33,18 @@ python -m disentangle_attempt.multichip_acquire \
   --chips "$MC_CHIPS" \
   --stars-per-chip "$MC_STARS_PER_CHIP"
 
+# --purge-fits extracts each chip to parquet immediately and deletes its raw FITS, so
+# only ~3,000 raw files exist at any moment instead of 240,000.  This is about the
+# FILE-COUNT quota, not space: TGLC's Gaia-derived path nests four directories per
+# star, and a uniform sample shares almost none of them, so mirroring the archive tree
+# costs ~5 inodes per light curve.  Re-downloading a chip takes about six seconds.
 python -m disentangle_attempt.multichip_acquire \
   --stage download \
   --data-dir "$DATA_DIR" \
   --sectors "$MC_SECTORS" \
   --chips "$MC_CHIPS" \
-  --workers "$WORKERS"
+  --workers "$WORKERS" \
+  --purge-fits
 
 echo
 echo "=== download stage finished ==="

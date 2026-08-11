@@ -55,8 +55,24 @@ else
 fi
 
 echo
-echo "--- disk space on the data filesystem (need ~22 GB free) ---"
-df -h "$(dirname "$DATA_DIR")" | tail -2 | sed 's/^/  /'
+echo "--- quota (need ~22 GB AND headroom in the FILE-COUNT quota) ---"
+echo "  filesystem free space:"
+df -h "$(dirname "$DATA_DIR")" | tail -1 | sed 's/^/    /'
+echo "  filesystem free inodes:"
+df -i "$(dirname "$DATA_DIR")" | tail -1 | sed 's/^/    /'
+echo
+echo "  YOUR quota (the shared filesystem above is not the limit that bites):"
+if command -v lfs >/dev/null 2>&1 && lfs quota -u "$USER" "$DATA_DIR" 2>/dev/null | tail -3 | sed 's/^/    /'; then
+  :
+elif quota -s 2>/dev/null | tail -4 | sed 's/^/    /'; then
+  :
+else
+  echo "    (no quota command found -- read the QUOTA REPORT printed at login)"
+fi
+echo
+echo "  This job writes ~240,000 light-curve files. With --purge-fits (the default in"
+echo "  01_acquire.sh) only one chip of ~3,000 files exists at a time, so the steady"
+echo "  cost is ~80 parquet chunks. Without it you need ~240,000 free files."
 
 echo
 if [ "$fail" -eq 0 ]; then
