@@ -362,8 +362,15 @@ def _cohort_peers(matched):
 
     tic = matched["TIC"].to_numpy().astype(str)
     tic_int = np.array([int(t) for t in tic], dtype=np.int64)
-    selector = SpreadPeerSelector(det_x, det_y, tic, tic_int,
-                                  outer_expansion_radii=(1024.0, 1536.0, 2048.0, 3072.0))
+    # A small node budget on purpose.  This cohort has ~150 stars per chip, so many
+    # anchors simply cannot host a two-band group; at the default 1,000,000 nodes each
+    # such anchor would burn minutes in exact backtracking across seven fallback
+    # stages, for an answer we already accept losing (nearest-8 fallback below).
+    selector = SpreadPeerSelector(
+        det_x, det_y, tic, tic_int,
+        outer_expansion_radii=(1024.0, 1536.0, 2048.0, 3072.0),
+        exact_search_node_budget=int(os.environ.get("PEER_NODE_BUDGET", "2000")),
+    )
 
     peers = np.full((len(gaia), 8), -1, dtype=np.int64)
     spread = nearest = failed = 0
