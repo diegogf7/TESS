@@ -12,9 +12,9 @@ accuracy are all imported from ``eval_phyts_instrument_ab`` -- the same code tha
 produced the physics-JEPA numbers.  So the difference between arms is the
 representation and nothing else.
 
-    ARM=jepa   python -m src.instrument_v2.eval_moment_phyts_baseline
-    ARM=moment python -m src.instrument_v2.eval_moment_phyts_baseline
-    ARM=both   python -m src.instrument_v2.eval_moment_phyts_baseline   # default
+    MOMENT_ARM=jepa   python -m src.instrument_v2.eval_moment_phyts_baseline
+    MOMENT_ARM=moment python -m src.instrument_v2.eval_moment_phyts_baseline
+    MOMENT_ARM=both   python -m src.instrument_v2.eval_moment_phyts_baseline   # default
 
 Reference points on THIS cohort (7-class, chance 0.143): the ms16 physics JEPA scores
 ~0.629-0.636.  The 0.688 figure quoted elsewhere is from a different, larger eval and
@@ -49,8 +49,12 @@ from src.instrument_v2.eval_phyts_instrument_ab import (  # exact reuse of the p
 )
 from src.instrument_v2.eval_phyts_raw_tglc_ab import TGLC_PATH, match_phyts_tglc, quality_filter
 
-ARM = os.environ.get("ARM", "both")
-assert ARM in ("jepa", "moment", "both"), ARM
+# MOMENT_ARM, not ARM: src/instrument_v2/train_sector14_jepa.py reads a bare ARM at
+# IMPORT time and asserts it is "shared" or "legacy".  That module is pulled in
+# transitively by the protocol imports below, so exporting ARM=both would abort the
+# process before main() ever runs.
+MOMENT_ARM = os.environ.get("MOMENT_ARM", "both")
+assert MOMENT_ARM in ("jepa", "moment", "both"), MOMENT_ARM
 MOMENT_MODEL = os.environ.get("MOMENT_MODEL", "AutonLab/MOMENT-1-large")
 PHYS_CKPT = os.environ.get(
     "JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa_ms16.pth"
@@ -211,9 +215,9 @@ def main() -> None:
     ).hexdigest()
 
     arms = {}
-    if ARM in ("jepa", "both"):
+    if MOMENT_ARM in ("jepa", "both"):
         arms["jepa"] = encode_jepa(X, M)
-    if ARM in ("moment", "both"):
+    if MOMENT_ARM in ("moment", "both"):
         arms["moment"] = encode_moment(X, M)
 
     results = {}
@@ -239,8 +243,8 @@ def main() -> None:
         "cohort_hash": split_hash,
         "train_curves": int(len(train_idx)),
         "test_curves": int(len(test_idx)),
-        "moment_model": MOMENT_MODEL if ARM in ("moment", "both") else None,
-        "jepa_checkpoint": PHYS_CKPT if ARM in ("jepa", "both") else None,
+        "moment_model": MOMENT_MODEL if MOMENT_ARM in ("moment", "both") else None,
+        "jepa_checkpoint": PHYS_CKPT if MOMENT_ARM in ("jepa", "both") else None,
         "arms": results,
         "comparability_note": (
             "7-class sector-14 cohort. NOT comparable to the PhyTS paper's 8-class "
