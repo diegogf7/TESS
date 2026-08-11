@@ -84,7 +84,7 @@ TGLC_PATH = os.environ.get(
 # transitively by the protocol imports below, so exporting ARM=both would abort the
 # process before main() ever runs.
 MOMENT_ARM = os.environ.get("MOMENT_ARM", "all")
-_ARMS = ("jepa", "moment", "twodecoder")
+_ARMS = ("jepa", "moment", "twodecoder", "twodecoder_random")
 assert MOMENT_ARM in _ARMS + ("both", "all"), MOMENT_ARM
 
 
@@ -255,6 +255,42 @@ def encode_jepa(X: np.ndarray, M: np.ndarray) -> np.ndarray:
     return encode_physics(model, X, M)
 
 
+def encode_twodecoder_random(X: np.ndarray, M: np.ndarray) -> np.ndarray:
+    """The SAME architecture at seed-42 init, weights never trained.
+
+    This is the control that decides whether the trained two-decoder number means
+    anything.  An S4D with random weights is still a structured random projection, and
+    on this project's own instrument benchmark random init (0.444) beat the trained
+    chip-pair JEPA (0.395).  So "trained scores 2x chance" is not evidence of learning
+    until it is shown to beat its own random initialization on the identical input.
+    """
+    from disentangle_attempt.twodecoder_spread_model import build_twodecoder_model
+    from disentangle_attempt.train import set_seed
+
+    checkpoint = torch.load(TWODECODER_CKPT, map_location="cpu", weights_only=False)
+    set_seed(int(checkpoint["config"].get("seed", 42)))
+    model = build_twodecoder_model(checkpoint["config"]).to(DEVICE)
+    _freeze(model)
+    print("two-decoder RANDOM INIT control (same architecture, untrained)", flush=True)
+    return _encode_twodecoder_physics(model, X, M)
+
+
+def _encode_twodecoder_physics(model, X: np.ndarray, M: np.ndarray) -> np.ndarray:
+    outs = []
+    with torch.no_grad():
+        for start in range(0, len(X), BATCH):
+            flux = torch.tensor(X[start : start + BATCH], dtype=torch.float32, device=DEVICE)
+            valid = torch.tensor(
+                M[start : start + BATCH] > 0.5, dtype=torch.bool, device=DEVICE
+            )
+            _, latent = model.encode_physics(flux, valid)
+            outs.append(latent.float().cpu().numpy())
+    latents = np.concatenate(outs)
+    if not np.isfinite(latents).all():
+        raise RuntimeError("two-decoder physics encoder produced non-finite latents")
+    return latents
+
+
 def encode_twodecoder(X: np.ndarray, M: np.ndarray) -> np.ndarray:
     """Frozen physics_latent (64-dim) from the two-decoder spread model.
 
@@ -317,6 +353,8 @@ def main() -> None:
         arms["moment"] = encode_moment(X, M)
     if _wants("twodecoder"):
         arms["twodecoder"] = encode_twodecoder(X, M)
+    if _wants("twodecoder_random"):
+        arms["twodecoder_random"] = encode_twodecoder_random(X, M)
 
     results = {}
     for name, latents in arms.items():
