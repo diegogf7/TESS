@@ -28,7 +28,7 @@ conda activate "${CONDA_ENV:-lightcurve}"
 cd "${REPO:-/orcd/scratch/orcd/006/diegogon/TESS}"
 
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
-export MOMENT_ARM="${MOMENT_ARM:-both}"
+export MOMENT_ARM="${MOMENT_ARM:-all}"
 export PYTHONUNBUFFERED=1
 
 echo "=== $(hostname) ==="
