@@ -13,9 +13,13 @@ export OUT_DIR="${OUT_DIR:-/orcd/scratch/orcd/006/diegogon/multichip_out}"
 export LOG_DIR="${LOG_DIR:-/orcd/scratch/orcd/006/diegogon/logs}"
 
 # Sectors 1-5, all 16 camera/CCD chips each = 80 chips.
-export SECTORS="${SECTORS:-1,2,3,4,5}"
-export CHIPS="${CHIPS:-all}"
-export STARS_PER_CHIP="${STARS_PER_CHIP:-3000}"
+#
+# These are MC_-prefixed on purpose.  disentangle_attempt/fetch_data.py parses bare
+# SECTORS and CHIPS from the environment at *import* time, and multichip_acquire
+# imports it -- so exporting a bare CHIPS=all crashes the import before main() runs.
+export MC_SECTORS="${MC_SECTORS:-1,2,3,4,5}"
+export MC_CHIPS="${MC_CHIPS:-all}"
+export MC_STARS_PER_CHIP="${MC_STARS_PER_CHIP:-3000}"
 
 # Slurm partitions.  GPU work goes to ou_mki_gpu, CPU work to pg_mki_aryeh.
 export GPU_PARTITION="${GPU_PARTITION:-ou_mki_gpu}"

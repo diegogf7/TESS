@@ -18,26 +18,26 @@ source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
 WORKERS="${WORKERS:-64}"
 
-echo "=== sectors $SECTORS | chips $CHIPS | $STARS_PER_CHIP stars/chip | $WORKERS workers ==="
+echo "=== sectors $MC_SECTORS | chips $MC_CHIPS | $MC_STARS_PER_CHIP stars/chip | $WORKERS workers ==="
 date
 
 python -m disentangle_attempt.multichip_acquire \
   --stage index \
   --data-dir "$DATA_DIR" \
-  --sectors "$SECTORS"
+  --sectors "$MC_SECTORS"
 
 python -m disentangle_attempt.multichip_acquire \
   --stage select \
   --data-dir "$DATA_DIR" \
-  --sectors "$SECTORS" \
-  --chips "$CHIPS" \
-  --stars-per-chip "$STARS_PER_CHIP"
+  --sectors "$MC_SECTORS" \
+  --chips "$MC_CHIPS" \
+  --stars-per-chip "$MC_STARS_PER_CHIP"
 
 python -m disentangle_attempt.multichip_acquire \
   --stage download \
   --data-dir "$DATA_DIR" \
-  --sectors "$SECTORS" \
-  --chips "$CHIPS" \
+  --sectors "$MC_SECTORS" \
+  --chips "$MC_CHIPS" \
   --workers "$WORKERS"
 
 echo

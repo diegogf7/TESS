@@ -52,9 +52,26 @@ OUT_PARQUET = os.path.join(DATA_DIR, "cross_sector_raw.parquet")
 # SECTORS/CHIPS drive the multi-chip fetch. Sectors 1-26 are the primary mission and
 # are ALL 30-minute FFIs, so their cadence grids are directly comparable; sector 27+
 # switch to 10-minute and must not be mixed in.
-SECTORS = tuple(int(v) for v in os.environ.get("SECTORS", "1").split(",") if v.strip())
-CHIPS = tuple(tuple(int(x) for x in pair.split("-"))
-              for pair in os.environ.get("CHIPS", "4-2").split(",") if pair.strip())
+def _env_tuple(name, default, parse):
+    """Parse an env var at import time, falling back to the default if it is not ours.
+
+    These are read when the module is IMPORTED, so another tool that merely imports
+    `extract_one` inherits whatever SECTORS/CHIPS happen to be exported. A shell that
+    set CHIPS="all" for a different script used to crash the import with
+    `int('all')` before any main() could run. Unparseable values now fall back rather
+    than taking the importer down with them.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        raw = default
+    try:
+        return tuple(parse(v) for v in raw.split(",") if v.strip())
+    except (ValueError, IndexError):
+        return tuple(parse(v) for v in default.split(",") if v.strip())
+
+
+SECTORS = _env_tuple("SECTORS", "1", int)
+CHIPS = _env_tuple("CHIPS", "4-2", lambda pair: tuple(int(x) for x in pair.split("-")))
 SECTOR_A = int(os.environ.get("SECTOR_A", str(SECTORS[0])))
 CAMERA = int(os.environ.get("CAMERA", str(CHIPS[0][0])))   # CVZ camera in sectors 1-13
 CCD = int(os.environ.get("CCD", str(CHIPS[0][1])))

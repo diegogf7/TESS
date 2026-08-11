@@ -506,7 +506,28 @@ class MultiChipSpreadPatch:
             rows, distances = self.peers[split]
             anchors = self.split_anchors[split]
             if len(anchors) == 0:
-                raise RuntimeError(f"split {split} kept no anchors")
+                # Say why, not just that.  The usual cause is a per-chip pool too thin
+                # for this split, which happens long before the geometry is consulted.
+                thin = [
+                    item for item in self.thin_chip_splits if item["split"] == split
+                ]
+                detail = [
+                    f"split {split!r} kept no anchors",
+                    f"  candidate anchors offered : {len(self.candidate_anchors[split])}",
+                    f"  chips with a usable pool  : {len(self.split_pool[split])} of {len(self.chips)}",
+                    f"  chips whose pool was thin : {len(thin)} (need >= {self.min_chip_pool} stars)",
+                ]
+                if thin:
+                    worst = sorted(thin, key=lambda item: -item["pool"])[:5]
+                    detail.append(
+                        "  largest thin pools        : "
+                        + ", ".join(f"{i['chip']}={i['pool']}" for i in worst)
+                    )
+                    detail.append(
+                        f"  the {split} split is ~{'80' if split == 'train' else '10'}% of each "
+                        "chip's stars, so raise --stars-per-chip or lower min_chip_pool"
+                    )
+                raise RuntimeError("\n".join(detail))
             if rows.shape != (len(anchors), self.n_peers):
                 raise AssertionError(f"{split} peer table shape is wrong")
             if (rows < 0).any() or not np.isfinite(distances).all():

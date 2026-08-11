@@ -22,25 +22,25 @@ set -euo pipefail
 REPO="${REPO:-/orcd/scratch/orcd/006/diegogon/TESS}"
 source "$REPO/disentangle_attempt/orcd/env.sh"
 
-echo "=== extract + positions: sectors $SECTORS ==="
+echo "=== extract + positions: sectors $MC_SECTORS ==="
 date
 
 python -m disentangle_attempt.multichip_acquire \
   --stage extract \
   --data-dir "$DATA_DIR" \
-  --sectors "$SECTORS" \
-  --chips "$CHIPS" \
+  --sectors "$MC_SECTORS" \
+  --chips "$MC_CHIPS" \
   --workers "${SLURM_CPUS_PER_TASK:-16}"
 
 python -m disentangle_attempt.multichip_acquire \
   --stage positions \
   --data-dir "$DATA_DIR" \
-  --sectors "$SECTORS"
+  --sectors "$MC_SECTORS"
 
 python -m disentangle_attempt.multichip_acquire \
   --stage coverage \
   --data-dir "$DATA_DIR" \
-  --sectors "$SECTORS"
+  --sectors "$MC_SECTORS"
 
 echo
 echo "=== finished ==="
