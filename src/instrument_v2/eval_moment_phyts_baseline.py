@@ -12,16 +12,36 @@ accuracy are all imported from ``eval_phyts_instrument_ab`` -- the same code tha
 produced the physics-JEPA numbers.  So the difference between arms is the
 representation and nothing else.
 
-    MOMENT_ARM=jepa   python -m src.instrument_v2.eval_moment_phyts_baseline
-    MOMENT_ARM=moment python -m src.instrument_v2.eval_moment_phyts_baseline
-    MOMENT_ARM=both   python -m src.instrument_v2.eval_moment_phyts_baseline   # default
+Three arms: the physics JEPA, MOMENT zero-shot, and the two-decoder spread model's
+64-dim ``physics_latent``.
+
+    MOMENT_ARM=all        python -m src.instrument_v2.eval_moment_phyts_baseline  # default
+    MOMENT_ARM=twodecoder python -m src.instrument_v2.eval_moment_phyts_baseline
+    MOMENT_ARM=both       python -m src.instrument_v2.eval_moment_phyts_baseline  # jepa+moment
 
 Reference points on THIS cohort (7-class, chance 0.143): the ms16 physics JEPA scores
 ~0.629-0.636.  The 0.688 figure quoted elsewhere is from a different, larger eval and
 is NOT the number to compare against here.
 
-MOMENT needs ``pip install momentfm`` and downloads weights from HuggingFace, so the
-first run must have outbound network (a login node).
+READ THIS BEFORE INTERPRETING THE TWO-DECODER ARM.  Its score is confounded two ways,
+and a low number would NOT establish that its representation is poor:
+
+1. Domain shift.  It was trained on Sector 1 / camera 4 / CCD 2 alone; this cohort is
+   sector 14.  It has never seen these systematics.  (The JEPA has its own, milder
+   domain shift, so this is a difference of degree, not of kind.)
+2. Preprocessing mismatch.  It was trained on curves built by
+   ``disentangle_attempt.preprocess.preprocess_curve`` -- placed by exact cadence
+   NUMBER on a sector-specific grid, median/MAD normalized.  Here every arm is fed
+   ``physics_grid``, which resamples by TIME.  Feeding all arms identical input is what
+   makes the comparison fair between encoders, but it puts this one off its training
+   distribution.
+
+So treat the two-decoder number as a floor, not an estimate.  If it scores well despite
+both handicaps, that is informative.  If it scores badly, the next step is a rerun on
+its native cadence-gridded pipeline before concluding anything.
+
+MOMENT needs ``pip install --no-deps momentfm`` and downloads weights from HuggingFace,
+so the first run must have outbound network (a login node).
 """
 
 from __future__ import annotations
@@ -47,20 +67,44 @@ from src.instrument_v2.eval_phyts_instrument_ab import (  # exact reuse of the p
     physics_grid,
     _freeze,
 )
-from src.instrument_v2.eval_phyts_raw_tglc_ab import TGLC_PATH, match_phyts_tglc, quality_filter
+from src.instrument_v2.eval_phyts_raw_tglc_ab import match_phyts_tglc, quality_filter
+
+# Deliberately NOT eval_phyts_raw_tglc_ab's TGLC_PATH default: that one points at
+# tglc_raw_cadence_s14_dense_v2.parquet, which covers only 65 of the 2,409 PhyTS S14
+# Gaia sources (verified by find_tglc_for_phyts).  The A/B runs must have exported
+# TGLC_PATH.  tglc_raw_phyts_s14.parquet covers 2409/2409 and carries both flux and
+# quality flags, so it is the right default for a PhyTS-cohort evaluation.
+TGLC_PATH = os.environ.get(
+    "TGLC_PATH",
+    "/orcd/scratch/orcd/006/diegogon/tglc_primary/tglc_raw_phyts_s14.parquet",
+)
 
 # MOMENT_ARM, not ARM: src/instrument_v2/train_sector14_jepa.py reads a bare ARM at
 # IMPORT time and asserts it is "shared" or "legacy".  That module is pulled in
 # transitively by the protocol imports below, so exporting ARM=both would abort the
 # process before main() ever runs.
-MOMENT_ARM = os.environ.get("MOMENT_ARM", "both")
-assert MOMENT_ARM in ("jepa", "moment", "both"), MOMENT_ARM
+MOMENT_ARM = os.environ.get("MOMENT_ARM", "all")
+_ARMS = ("jepa", "moment", "twodecoder")
+assert MOMENT_ARM in _ARMS + ("both", "all"), MOMENT_ARM
+
+
+def _wants(name: str) -> bool:
+    """'all' = every arm; 'both' = the original jepa+moment pair."""
+    if MOMENT_ARM == "all":
+        return True
+    if MOMENT_ARM == "both":
+        return name in ("jepa", "moment")
+    return MOMENT_ARM == name
 MOMENT_MODEL = os.environ.get("MOMENT_MODEL", "AutonLab/MOMENT-1-large")
 PHYS_CKPT = os.environ.get(
     "JEPA_CKPT", "/orcd/scratch/orcd/006/diegogon/checkpoints/latent_jepa_ms16.pth"
 )
 JEPA_READOUT = os.environ.get("JEPA_READOUT", "mean_std")
 JEPA_NTOKENS = os.environ.get("JEPA_NTOKENS", "16")
+TWODECODER_CKPT = os.environ.get(
+    "TWODECODER_CKPT",
+    "disentangle_attempt/outputs/local_s1_c4_ccd2_twodecoder_p64_i4_spread/best.pt",
+)
 OUT_DIR = os.environ.get(
     "OUT_DIR", os.path.join("artifacts", "instrument_v2", "moment_phyts_baseline")
 )
@@ -211,6 +255,43 @@ def encode_jepa(X: np.ndarray, M: np.ndarray) -> np.ndarray:
     return encode_physics(model, X, M)
 
 
+def encode_twodecoder(X: np.ndarray, M: np.ndarray) -> np.ndarray:
+    """Frozen physics_latent (64-dim) from the two-decoder spread model.
+
+    Only the physics route is used: the instrument decoder needs eight same-chip peers,
+    which do not exist for an arbitrary labelled star, and the physics encoder is the
+    part that is supposed to carry stellar signal anyway.  Nothing is masked here --
+    the encoder gets the full curve with its real validity mask, which is how a
+    representation probe should see it.
+    """
+    from disentangle_attempt.twodecoder_spread_model import build_twodecoder_model
+
+    checkpoint = torch.load(TWODECODER_CKPT, map_location=DEVICE, weights_only=False)
+    config = checkpoint["config"]
+    model = build_twodecoder_model(config).to(DEVICE)
+    model.load_state_dict(checkpoint["model_state"], strict=True)
+    _freeze(model)
+    print(
+        f"two-decoder {TWODECODER_CKPT} | epoch {checkpoint.get('epoch')} "
+        f"| val {checkpoint.get('validation_masked_smooth_l1'):.5f}",
+        flush=True,
+    )
+
+    outs = []
+    with torch.no_grad():
+        for start in range(0, len(X), BATCH):
+            flux = torch.tensor(X[start : start + BATCH], dtype=torch.float32, device=DEVICE)
+            valid = torch.tensor(
+                M[start : start + BATCH] > 0.5, dtype=torch.bool, device=DEVICE
+            )
+            _, latent = model.encode_physics(flux, valid)
+            outs.append(latent.float().cpu().numpy())
+    latents = np.concatenate(outs)
+    if not np.isfinite(latents).all():
+        raise RuntimeError("two-decoder physics encoder produced non-finite latents")
+    return latents
+
+
 def main() -> None:
     os.makedirs(OUT_DIR, exist_ok=True)
     matched, tics, y = build_cohort()
@@ -230,10 +311,12 @@ def main() -> None:
     ).hexdigest()
 
     arms = {}
-    if MOMENT_ARM in ("jepa", "both"):
+    if _wants("jepa"):
         arms["jepa"] = encode_jepa(X, M)
-    if MOMENT_ARM in ("moment", "both"):
+    if _wants("moment"):
         arms["moment"] = encode_moment(X, M)
+    if _wants("twodecoder"):
+        arms["twodecoder"] = encode_twodecoder(X, M)
 
     results = {}
     for name, latents in arms.items():
@@ -258,8 +341,9 @@ def main() -> None:
         "cohort_hash": split_hash,
         "train_curves": int(len(train_idx)),
         "test_curves": int(len(test_idx)),
-        "moment_model": MOMENT_MODEL if MOMENT_ARM in ("moment", "both") else None,
-        "jepa_checkpoint": PHYS_CKPT if MOMENT_ARM in ("jepa", "both") else None,
+        "moment_model": MOMENT_MODEL if _wants("moment") else None,
+        "jepa_checkpoint": PHYS_CKPT if _wants("jepa") else None,
+        "twodecoder_checkpoint": TWODECODER_CKPT if _wants("twodecoder") else None,
         "arms": results,
         "comparability_note": (
             "7-class sector-14 cohort. NOT comparable to the PhyTS paper's 8-class "
@@ -267,11 +351,18 @@ def main() -> None:
             "and a different split. Only the arms in this file share a protocol."
         ),
     }
-    if len(results) == 2:
-        summary["moment_minus_jepa"] = (
-            results["moment"]["balanced_accuracy"] - results["jepa"]["balanced_accuracy"]
+    if len(results) > 1:
+        print("\n=== same cohort, same split, same KNN(20) probe ===", flush=True)
+        for name, item in sorted(
+            results.items(), key=lambda kv: -kv[1]["balanced_accuracy"]
+        ):
+            print(
+                f"  {name:<12s} {item['balanced_accuracy']:.4f}  (dim {item['latent_dim']})",
+                flush=True,
+            )
+        summary["ranking"] = sorted(
+            results, key=lambda k: -results[k]["balanced_accuracy"]
         )
-        print(f"\nmoment - jepa = {summary['moment_minus_jepa']:+.4f}", flush=True)
 
     path = os.path.join(OUT_DIR, "summary.json")
     with open(path, "w") as handle:
