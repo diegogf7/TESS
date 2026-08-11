@@ -88,11 +88,26 @@ def build_cohort():
     tglc = tglc.rename(columns={flux_col: "aperture_flux"})
 
     matched, unmatched = match_phyts_tglc(phyts, tglc)
+    rate = len(matched) / max(len(phyts), 1)
     print(
         f"PhyTS s14 rows {len(phyts)} | matched to raw TGLC {len(matched)} "
-        f"| unmatched {len(unmatched)}",
+        f"({100 * rate:.1f}%) | unmatched {len(unmatched)}",
         flush=True,
     )
+    # A low match rate is not a small inconvenience: the join is on (GAIADR3, sector),
+    # so it means this parquet covers a different set of stars.  Continuing would
+    # produce a real-looking balanced accuracy computed on a tiny, unrepresentative
+    # cohort -- worse than failing, because it looks like a result.
+    if rate < float(os.environ.get("MIN_MATCH_RATE", "0.5")):
+        raise SystemExit(
+            f"only {len(matched)}/{len(phyts)} PhyTS rows matched TGLC_PATH="
+            f"{TGLC_PATH}\n"
+            "That parquet does not cover this cohort. Find one that does:\n"
+            "    python -m src.instrument_v2.find_tglc_for_phyts\n"
+            "then re-run with TGLC_PATH=<that file>.\n"
+            "(Override this guard with MIN_MATCH_RATE=0 if a small cohort is "
+            "genuinely intended.)"
+        )
     y = np.array([CLASS_TO_IDX[label] for label in matched["label"]], dtype=np.int64)
     tics = matched["TIC"].to_numpy().astype(str)
     return matched, tics, y
