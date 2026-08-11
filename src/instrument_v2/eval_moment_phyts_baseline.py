@@ -137,8 +137,18 @@ def encode_moment(X: np.ndarray, M: np.ndarray) -> np.ndarray:
         from momentfm import MOMENTPipeline
     except ImportError as exc:
         raise SystemExit(
-            "momentfm is not installed. On a login node:\n"
-            "    pip install momentfm\n"
+            "momentfm is not importable.\n"
+            "Install it into the lightcurve env, WITHOUT its dependency pins:\n"
+            "    conda activate lightcurve\n"
+            "    pip install --no-deps momentfm\n"
+            '    pip install --no-deps "transformers<5" einops   # only if the import '
+            "still fails\n"
+            "\n"
+            "--no-deps is required: momentfm pins numpy==1.25.2 and "
+            "huggingface-hub==0.24.0.\n"
+            "numpy 1.25.2 cannot build on Python 3.12+ (pkgutil.ImpImporter was "
+            "removed), and\n"
+            "installing it would downgrade numpy underneath torch.\n"
             f"(import failed: {exc})"
         )
 
