@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from src.data.data import DisentanglementDataset, DataLoader
-from src.models.jepa_2 import JEPA_2, jepa_loss
+from src.models.jepa_2 import JEPA_2, jepa_loss, variance_loss
 
 BATCH_SIZE = 256
 EPOCHS = 100
@@ -43,9 +43,9 @@ for epoch in range(EPOCHS):
 
         #context is the different star and then the target is the anchor (so flipped)
 
-        prediction, z_target = model(same_star_flux, same_star_mask, anchor_flux, anchor_mask)
+        prediction, z_target, z_context = model(same_star_flux, same_star_mask, anchor_flux, anchor_mask)
 
-        loss = jepa_loss(prediction, z_target)
+        loss = jepa_loss(prediction, z_target) + 1.0 * variance_loss(z_context)
 
         loss.backward()
         optimizer.step()
@@ -77,7 +77,7 @@ for epoch in range(EPOCHS):
             anchor_flux = anchor_flux.unsqueeze(-1)
             same_star_flux = same_star_flux.unsqueeze(-1)
 
-            prediction, z_target = model(same_star_flux, same_star_mask, anchor_flux, anchor_mask)
+            prediction, z_target, _ = model(same_star_flux, same_star_mask, anchor_flux, anchor_mask)
 
 
             #forwards process now
