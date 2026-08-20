@@ -8,6 +8,7 @@ This is the initial preprocessing pipeline for getting the systematics of the ar
 This is the secondary pipeline that trains the physics side using classical JEPA, hoping to capture the true physics side
 
 <img width="820" height="556" alt="Screenshot 2026-08-20 at 12 48 39 PM" src="https://github.com/user-attachments/assets/c9a753af-25e7-47c5-ac81-e01a8881ae6f" />
+
 This is the entire pipeline at inference
 
 Work is done in collaboration with MIT's Transiting Exoplanet Survey Satellite (TESS) Group
