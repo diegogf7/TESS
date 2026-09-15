@@ -43,9 +43,34 @@ def collapse_report(z):
     }
 
 
-def is_collapsed(report):
-    """The spec's rejection rule."""
-    return report["std_median"] < 0.5 or report["frac_std_below_0.5"] > 0.20
+# Effective rank below this fraction of the latent width counts as collapse.
+MIN_ERANK_FRAC = 0.25
+
+
+def collapse_reasons(report, min_erank_frac=MIN_ERANK_FRAC):
+    """Which rejection conditions fired, if any.
+
+    The first two are the spec's rule. The third was added after a real-data
+    pilot produced a latent with median std 0.667 -- clearing the spec's rule --
+    whose effective rank was 1.7 of 64 and whose off-diagonal covariance had
+    exploded to 11.7. The variance hinge can satisfy a per-dimension std floor
+    by inflating dimensions that all point the same way, so a std-only rule is
+    necessary but not sufficient. Effective rank catches that; std cannot.
+    """
+    reasons = []
+    if report["std_median"] < 0.5:
+        reasons.append("std_median<0.5")
+    if report["frac_std_below_0.5"] > 0.20:
+        reasons.append("frac_std_below_0.5>0.20")
+    floor = min_erank_frac * report["dims"]
+    if report["effective_rank"] < floor:
+        reasons.append(f"effective_rank<{floor:.1f}")
+    return reasons
+
+
+def is_collapsed(report, min_erank_frac=MIN_ERANK_FRAC):
+    """Rejection rule: the spec's two std conditions plus an effective-rank floor."""
+    return bool(collapse_reasons(report, min_erank_frac))
 
 
 # ------------------------------------------------------------ probes
@@ -117,6 +142,7 @@ def evaluate_representation(name, encoder, part1_encoder, sources, device,
             continue
         r = collapse_report(z[k])
         r["collapsed"] = is_collapsed(r)
+        r["collapse_reasons"] = collapse_reasons(r)
         r["mean_abs_corr_with_systematics"] = mean_abs_corr(z[k], zs[k])
         r["physics_bacc"] = probe(z["train"], sources["train"].label,
                                   z[k], src.label, seed)

@@ -12,6 +12,7 @@ Last updated from the real-data pilot on the local workstation (CPU only).
 | Corrected architecture preserved | **Yes** — all three deviations kept and regression-tested |
 | Automated checks (spec §8) | **Yes** — 15/15 real-data checks pass, 21/21 synthetic |
 | Part 1 trained and validated on real data | **Partial** — 400-step CPU pilot only |
+| Part 2 trained on real data | **Partial** — 400-step CPU pilot; collapsed under spec weights |
 | Part 1 saved and frozen | **Yes** — best-validation checkpoint, bit-identity asserted through Part 2 |
 | Pilot sweep completed | **No** — harness written and exercised, full 4-cell grid not run |
 | Ablations + 3-seed final runs | **No** — harness written, not run |
@@ -53,11 +54,31 @@ shared structure rather than copying.
 `grad_clip=1.0` has been added to both loops; the spike predates it. Watch
 `grad_norm` in `metrics.jsonl` on the first cluster run.
 
-**The spec's λ=25 / μ=1 collapses on real data too.** Effective rank fell from
-9.8 to 7.2 out of 64 over the first 100 steps, with median std 0.129 against
-γ=1.0 — the pilot's own rejection rule flags it `COLLAPSED`. This reproduces the
+**The spec's λ=25 / μ=1 collapses on real data too.** Over 400 steps effective
+rank fell 9.8 → 7.2 → 3.5 → 1.9 → **1.7 out of 64**. This reproduces the
 synthetic finding. The sweep exists precisely to settle this; μ=25 was the
 non-collapsing cell synthetically.
+
+**The spec's collapse rejection rule is not sufficient, and it corrupted
+selection.** At step 399 the latent had median std 0.667 and only 15% of
+dimensions below 0.5 — clearing both of the spec's conditions — while its
+effective rank was 1.7 of 64 and its off-diagonal covariance had exploded from
+1.10 to 11.72 in a hundred steps. The latent was effectively one-dimensional and
+the rule passed it.
+
+The mechanism: `L_var` is a per-dimension hinge with no cross-dimension term, so
+it can satisfy a std floor by inflating dimensions that all point the same way.
+Std measures each axis alone; nothing in the spec's rule measures whether the
+axes are distinct.
+
+The damage was concrete. Steps 100–300 were flagged collapsed and skipped, so
+the only checkpoint eligible for saving was step 399, whose `val_inv` of 0.0411
+is *worse* than step 300's 0.0150. A rule meant to reject bad configurations
+selected the worst available one.
+
+`is_collapsed` now applies the spec's two conditions plus an effective-rank
+floor at 25% of the latent width, and `collapse_reasons` records which fired.
+Under the corrected rule step 399 is rejected for `effective_rank<16.0`.
 
 ## To finish on the cluster
 

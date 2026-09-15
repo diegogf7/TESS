@@ -21,7 +21,8 @@ from torch.utils.data import DataLoader
 from .config import Part1Config, Part2Config
 from .data import (SyntheticCurveSource, RegionGroupDataset, SingleCurveDataset,
                    random_time_mask)
-from .evaluate import collapse_report, is_collapsed, mean_abs_corr, encode_source
+from .evaluate import (collapse_report, collapse_reasons, is_collapsed,
+                       mean_abs_corr, encode_source)
 from .losses import common_mode_loss, variance_loss, total_loss
 from .models import S4Encoder, CommonModeDecoder, VICRegJEPA
 from .real_data import RealCurveSource, assert_tic_disjoint, git_sha
@@ -281,6 +282,7 @@ def _part2_val(model, sources, cfg, device, n=1024):
     rep["val_inv"] = inv_tot / max(batches, 1)
     rep["val_mean_abs_corr"] = mean_abs_corr(zm_all, zs_all)
     rep["collapsed"] = is_collapsed(rep)
+    rep["collapse_reasons"] = collapse_reasons(rep)
     return rep
 
 
@@ -347,7 +349,8 @@ def train_part2(sources, part1_ckpt, cfg=Part2Config(), seed=0, run_root=None,
                       f"var={parts['var']:.4f} cov={parts['cov']:.4f} | "
                       f"val_inv={v['val_inv']:.4f} std_med={v['std_median']:.3f} "
                       f"erank={v['effective_rank']:.1f} "
-                      f"{'COLLAPSED' if v['collapsed'] else ''}", flush=True)
+                      f"{'COLLAPSED ' + ','.join(v['collapse_reasons']) if v['collapsed'] else ''}",
+                      flush=True)
             run.log(rec)
             step += 1
             if step >= cfg.steps:
