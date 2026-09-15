@@ -14,6 +14,7 @@
 #
 #   STAGE=cache      build the real-curve cache + split manifest
 #   STAGE=part1      train the frozen systematics encoder
+#   STAGE=search     3-stage collapse-gated hyperparameter search (>=100 trials)
 #   STAGE=pilot      lambda x mu sweep, selection on validation only
 #   STAGE=ablations  controls + ablations, 3 seeds each
 #   STAGE=final      the single test-set evaluation
@@ -37,6 +38,12 @@ SEEDS="${SEEDS:-0 1 2}"
 STEPS1="${STEPS1:-8000}"
 STEPS2="${STEPS2:-30000}"
 PILOT_STEPS="${PILOT_STEPS:-3000}"
+N_TRIALS="${N_TRIALS:-100}"
+S1_STEPS="${S1_STEPS:-2500}"
+S2_STEPS="${S2_STEPS:-10000}"
+S3_STEPS="${S3_STEPS:-30000}"
+S2_KEEP="${S2_KEEP:-12}"
+S3_KEEP="${S3_KEEP:-3}"
 
 mkdir -p "$OUT"
 echo "stage=$STAGE  out=$OUT  npz=$NPZ  git=$(git rev-parse HEAD)"
@@ -53,6 +60,24 @@ case "$STAGE" in
   part1)
     python -m src.vicreg_jepa.train --part 1 --source real --npz "$NPZ" \
       --steps1 "$STEPS1" --seed 0 --out "$OUT/part1_run"
+    ;;
+
+  search)
+    python -m src.vicreg_jepa.search --source real --npz "$NPZ" \
+      --part1-ckpt "$OUT/part1_run/part1/part1_best.pt" \
+      --n-trials "$N_TRIALS" \
+      --stage1-steps "$S1_STEPS" --stage2-steps "$S2_STEPS" \
+      --stage3-steps "$S3_STEPS" \
+      --stage2-keep "$S2_KEEP" --stage3-keep "$S3_KEEP" \
+      --seed 0 --out "$OUT/search"
+    ;;
+
+  ablations_selected)
+    # Requirement 5: the chosen hyperparameters propagate automatically.
+    python -m src.vicreg_jepa.sweep --stage ablations --source real --npz "$NPZ" \
+      --part1-ckpt "$OUT/part1_run/part1/part1_best.pt" \
+      --selection "$OUT/search/selection.json" \
+      --steps2 "$S3_STEPS" --seeds $SEEDS --out "$OUT/ablations"
     ;;
 
   pilot)

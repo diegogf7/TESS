@@ -95,7 +95,8 @@ class SingleCurveDataset(Dataset):
                 torch.from_numpy(self.observed[i]).float())
 
 
-def random_time_mask(flux, observed, ratio_min=0.30, ratio_max=0.50):
+def random_time_mask(flux, observed, ratio_min=0.30, ratio_max=0.50,
+                     generator=None):
     """Instruction 2.2 / spec 4.1. Fresh mask every call -- never cached, reused.
 
     Hides 30-50% of each curve's CURRENTLY OBSERVED cadences (not 30-50% of the
@@ -108,9 +109,17 @@ def random_time_mask(flux, observed, ratio_min=0.30, ratio_max=0.50):
     B, L = flux.shape
     obs = observed > 0
     n_obs = obs.sum(dim=1)                                        # (B,)
-    ratios = torch.rand(B, device=flux.device) * (ratio_max - ratio_min) + ratio_min
+    dev = flux.device
+    if generator is not None:
+        # fixed masking seed: draw on the generator's device, then move
+        gdev = generator.device
+        ratios = torch.rand(B, device=gdev, generator=generator).to(dev)
+        noise = torch.rand(B, L, device=gdev, generator=generator).to(dev)
+    else:
+        ratios = torch.rand(B, device=dev)
+        noise = torch.rand(B, L, device=dev)
+    ratios = ratios * (ratio_max - ratio_min) + ratio_min
     k = (ratios * n_obs.float()).long()                           # per-row hide count
-    noise = torch.rand(B, L, device=flux.device)
     noise = noise.masked_fill(~obs, float("inf"))                 # gaps sort last
     order = torch.argsort(noise, dim=1)
     rank = torch.argsort(order, dim=1)

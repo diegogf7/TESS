@@ -21,6 +21,7 @@ from torch.utils.data import DataLoader
 from .config import Part1Config, Part2Config
 from .data import (SyntheticCurveSource, RegionGroupDataset, SingleCurveDataset,
                    random_time_mask)
+from .collapse import CollapseThresholds, assess
 from .evaluate import (collapse_report, collapse_reasons, is_collapsed,
                        mean_abs_corr, encode_source)
 from .losses import common_mode_loss, variance_loss, total_loss
@@ -95,6 +96,37 @@ def load_sources(args):
         s.label = np.full(len(idx), -1, dtype=np.int16)
         out[name] = s
     return out
+
+
+class ValidationProbe:
+    """Fixed validation examples and fixed masking seeds, shared by every trial.
+
+    Requirement 4 of the search specification: two trials must be judged on the
+    same curves under the same mask draws, so that a difference in their
+    diagnostics is a difference in the model and not in the sample.
+    """
+
+    def __init__(self, source, n=1024, batch_size=256, seed=1234, device="cpu"):
+        idx = np.random.default_rng(seed).permutation(len(source.flux))[:n]
+        idx.sort()
+        self.index = idx
+        self.flux = torch.from_numpy(np.asarray(source.flux[idx], dtype=np.float32))
+        self.observed = torch.from_numpy(np.asarray(source.observed[idx], dtype=np.float32))
+        self.batch_size = batch_size
+        self.seed = seed
+        self.device = device
+
+    def batches(self, cfg):
+        """Deterministic (flux, observed, visible) batches for one validation pass."""
+        gen = torch.Generator().manual_seed(self.seed)
+        for i in range(0, len(self.flux), self.batch_size):
+            f = self.flux[i:i + self.batch_size].to(self.device)
+            o = self.observed[i:i + self.batch_size].to(self.device)
+            if len(f) < 8:
+                break
+            v = random_time_mask(f, o, cfg.mask_ratio_min, cfg.mask_ratio_max,
+                                 generator=gen)
+            yield f, o, v
 
 
 # ------------------------------------------------------------------ part 1
@@ -258,40 +290,58 @@ def verify_checklist(model, batch, cfg):
 
 
 @torch.no_grad()
-def _part2_val(model, sources, cfg, device, n=1024):
-    """Validation L_inv plus every collapse / disentanglement diagnostic."""
+def _part2_val(model, probe, cfg, device, thresholds, online_fail_streak=0):
+    """Validation on the fixed probe, measuring all three representations."""
     model.eval()
-    src = sources["val"]
-    flux = torch.from_numpy(np.asarray(src.flux[:n], dtype=np.float32)).to(device)
-    obs = torch.from_numpy(np.asarray(src.observed[:n], dtype=np.float32)).to(device)
-    inv_tot, zs_all, zm_all, batches = 0.0, [], [], 0
-    for i in range(0, len(flux), cfg.batch_size):
-        f, o = flux[i:i + cfg.batch_size], obs[i:i + cfg.batch_size]
-        if len(f) < 8:
-            break
-        v = random_time_mask(f, o, cfg.mask_ratio_min, cfg.mask_ratio_max)
+    inv_tot, batches = 0.0, 0
+    lanes = {"masked_online": [], "full_online": [], "full_ema": []}
+    sysl = []
+    for f, o, v in probe.batches(cfg):
         zm, zu, zsy, zp = model(f, o, v)
         inv_tot += float(torch.nn.functional.mse_loss(zp, zu))
-        zm_all.append(zm.cpu().numpy())
-        zs_all.append(zsy.cpu().numpy())
+        lanes["masked_online"].append(zm.cpu().numpy())
+        lanes["full_ema"].append(zu.cpu().numpy())
+        lanes["full_online"].append(model.encoder(f, o, pool_mask=o).cpu().numpy())
+        sysl.append(zsy.cpu().numpy())
         batches += 1
     model.train()
-    zm_all = np.concatenate(zm_all)
-    zs_all = np.concatenate(zs_all)
-    rep = collapse_report(zm_all)
-    rep["val_inv"] = inv_tot / max(batches, 1)
-    rep["val_mean_abs_corr"] = mean_abs_corr(zm_all, zs_all)
-    rep["collapsed"] = is_collapsed(rep)
-    rep["collapse_reasons"] = collapse_reasons(rep)
-    return rep
+
+    lanes = {k: np.concatenate(v) for k, v in lanes.items()}
+    sysl = np.concatenate(sysl)
+    verdict = assess(lanes, thresholds, online_fail_streak)
+    ema = verdict["stats"]["full_ema"]
+    return {
+        "val_inv": inv_tot / max(batches, 1),
+        "val_mean_abs_corr": mean_abs_corr(lanes["full_ema"], sysl),
+        "rejected": verdict["rejected"],
+        "why": verdict["why"],
+        "online_fail_streak": verdict["online_fail_streak"],
+        "meets_target_rank": verdict["meets_target_rank"],
+        "effective_rank": ema["effective_rank"],
+        "std_median": ema["std_median"],
+        "frac_std_below_floor": ema["frac_std_below_floor"],
+        "offdiag_cov_rms": ema["offdiag_cov_rms"],
+        "dup_pair_frac": ema["dup_pair_frac"],
+        "lanes": {k: verdict["stats"][k] for k in lanes},
+        "lane_reasons": verdict["reasons"],
+    }
 
 
 def train_part2(sources, part1_ckpt, cfg=Part2Config(), seed=0, run_root=None,
-                device=DEVICE, random_init_part1=False):
+                device=DEVICE, random_init_part1=False, thresholds=None,
+                probe=None, warmup_frac=0.10, prune_after=None):
+    """Train Part 2, saving ONLY checkpoints that pass every collapse check.
+
+    Returns (ckpt_or_None, summary, model). summary["status"] is one of
+    "ok" (a valid checkpoint exists), "failed_all_collapsed" (none ever passed),
+    or "pruned" (collapsed for `prune_after` consecutive validations).
+    """
     set_seed(seed)
+    thresholds = thresholds or CollapseThresholds()
     run = RunDir(run_root or "artifacts/vicreg_jepa/part2", cfg, seed,
                  {"part": 2, "part1_ckpt": part1_ckpt,
-                  "random_init_part1": random_init_part1})
+                  "random_init_part1": random_init_part1,
+                  "thresholds": thresholds.to_dict()})
 
     if random_init_part1:
         p1 = S4Encoder(cfg.sys_dim, cfg.n_tokens, cfg.d_model,
@@ -308,8 +358,17 @@ def train_part2(sources, part1_ckpt, cfg=Part2Config(), seed=0, run_root=None,
                             lr=cfg.lr, weight_decay=cfg.weight_decay)
     dl = DataLoader(SingleCurveDataset(sources["train"]), batch_size=cfg.batch_size,
                     shuffle=True, drop_last=True)
+    probe = probe or ValidationProbe(sources["val"], batch_size=cfg.batch_size,
+                                     device=device)
 
-    best, best_step, checked, step = float("inf"), -1, False, 0
+    best = float("inf")
+    best_step, best_val = -1, None
+    checked, step = False, 0
+    streak, reject_run = 0, 0
+    warmup_steps = int(warmup_frac * cfg.steps)
+    collapse_free_after_warmup = True
+    status = "ok"
+
     while step < cfg.steps:
         for flux, observed in dl:
             flux, observed = flux.to(device), observed.to(device)
@@ -335,22 +394,43 @@ def train_part2(sources, part1_ckpt, cfg=Part2Config(), seed=0, run_root=None,
                    "grad_norm": float(gnorm)}
 
             if step % cfg.eval_every == 0 or step == cfg.steps - 1:
-                v = _part2_val(model, sources, cfg, device)
-                rec.update({f"val_{k}": val for k, val in v.items()})
-                if v["val_inv"] < best and not v["collapsed"]:
-                    best, best_step = v["val_inv"], step
-                    torch.save({"encoder": model.encoder.state_dict(),
-                                "ema_encoder": model.ema_encoder.state_dict(),
-                                "predictor": model.predictor.state_dict(),
-                                "cfg": cfg.__dict__, "seed": seed, "step": step,
-                                "val": v, "git_sha": git_sha()}, run.path("part2_best.pt"))
-                    rec["saved_best"] = True
+                v = _part2_val(model, probe, cfg, device, thresholds, streak)
+                streak = v["online_fail_streak"]
+                rec.update({f"val_{k}": val for k, val in v.items()
+                            if k not in ("lanes", "lane_reasons")})
+                rec["val_lanes"] = v["lanes"]
+
+                if v["rejected"]:
+                    reject_run += 1
+                    if step >= warmup_steps:
+                        collapse_free_after_warmup = False
+                else:
+                    reject_run = 0
+                    # Requirement 2: save ONLY when every collapse check passes.
+                    if v["val_inv"] < best:
+                        best, best_step, best_val = v["val_inv"], step, v
+                        torch.save({"encoder": model.encoder.state_dict(),
+                                    "ema_encoder": model.ema_encoder.state_dict(),
+                                    "predictor": model.predictor.state_dict(),
+                                    "cfg": cfg.__dict__, "seed": seed, "step": step,
+                                    "val": v, "thresholds": thresholds.to_dict(),
+                                    "git_sha": git_sha()}, run.path("part2_best.pt"))
+                        rec["saved_best"] = True
+
                 print(f"[part2] {step:6d} inv={parts['inv']:.4f} cor={parts['cor_sys']:.4f} "
-                      f"var={parts['var']:.4f} cov={parts['cov']:.4f} | "
-                      f"val_inv={v['val_inv']:.4f} std_med={v['std_median']:.3f} "
-                      f"erank={v['effective_rank']:.1f} "
-                      f"{'COLLAPSED ' + ','.join(v['collapse_reasons']) if v['collapsed'] else ''}",
+                      f"| val_inv={v['val_inv']:.4f} erank={v['effective_rank']:.1f} "
+                      f"std_med={v['std_median']:.3f} dup={v['dup_pair_frac']:.2f}"
+                      + (f"  REJECT {'; '.join(v['why'][:2])}" if v["rejected"] else "  ok"),
                       flush=True)
+
+                if prune_after and reject_run >= prune_after:
+                    status = "pruned"
+                    print(f"[part2] pruned after {reject_run} consecutive rejected "
+                          f"validations", flush=True)
+                    run.log(rec)
+                    step = cfg.steps
+                    break
+
             run.log(rec)
             step += 1
             if step >= cfg.steps:
@@ -358,14 +438,32 @@ def train_part2(sources, part1_ckpt, cfg=Part2Config(), seed=0, run_root=None,
 
     assert param_fingerprint(model.part1) == p1_fingerprint, \
         "frozen Part 1 parameters changed during Part 2"
-    final = _part2_val(model, sources, cfg, device)
-    summary = {"best_val_inv": best, "best_step": best_step,
-               "final": final, "part1_unchanged": True}
+
+    if best_step < 0 and status != "pruned":
+        status = "failed_all_collapsed"
+
+    ckpt = run.path("part2_best.pt") if best_step >= 0 else None
+    summary = {
+        "status": status,
+        "best_val_inv": best if best_step >= 0 else None,
+        "best_step": best_step,
+        "best_val": best_val,
+        "collapse_free_after_warmup": collapse_free_after_warmup,
+        "meets_target_rank": bool(best_val and best_val["meets_target_rank"]),
+        "part1_unchanged": True,
+        "checkpoint": ckpt,
+    }
     with open(run.path("summary.json"), "w") as fh:
-        json.dump(summary, fh, indent=2)
-    print(f"[part2] best val_inv {best:.4f} @ step {best_step} | "
-          f"final collapsed={final['collapsed']}", flush=True)
-    return run.path("part2_best.pt"), summary, model
+        json.dump(summary, fh, indent=2, default=str)
+
+    if ckpt:
+        print(f"[part2] status={status} best val_inv {best:.4f} @ step {best_step} "
+              f"erank={best_val['effective_rank']:.1f} "
+              f"target_rank={'MET' if summary['meets_target_rank'] else 'not met'} "
+              f"collapse_free={collapse_free_after_warmup}", flush=True)
+    else:
+        print(f"[part2] status={status} -- NO VALID CHECKPOINT, trial failed", flush=True)
+    return ckpt, summary, model
 
 
 # ------------------------------------------------------------------ cli

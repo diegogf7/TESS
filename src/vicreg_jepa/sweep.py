@@ -124,7 +124,15 @@ def print_table(rows):
 
 
 def ablations(sources, part1_ckpt, base_cfg, seeds, out_root, device=DEVICE,
-              only=None):
+              only=None, selection=None):
+    """If `selection` is a search selection.json, its hyperparameters become the
+    base configuration for every arm, so ablations differ from the selected
+    model only in the switch being ablated (requirement 5)."""
+    if selection:
+        from .search import load_selected
+        base_cfg, sel = load_selected(os.path.dirname(selection) or ".", base_cfg)
+        print(f"[ablations] using selected config {sel['selected']}: {sel['hp']}",
+              flush=True)
     """spec s6: controls and ablations, each over several seeds."""
     results = {}
     for name, ov in ABLATIONS.items():
@@ -157,6 +165,8 @@ if __name__ == "__main__":
     ap.add_argument("--part1-ckpt", required=True)
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2])
     ap.add_argument("--only", nargs="*", default=None)
+    ap.add_argument("--selection", default=None,
+                    help="search selection.json; its hyperparameters become the base")
     args = ap.parse_args()
 
     sources = load_sources(args)
@@ -164,4 +174,5 @@ if __name__ == "__main__":
     if args.stage == "pilot":
         pilot(sources, args.part1_ckpt, c2, args.seed, args.out)
     else:
-        ablations(sources, args.part1_ckpt, c2, args.seeds, args.out, only=args.only)
+        ablations(sources, args.part1_ckpt, c2, args.seeds, args.out,
+                  only=args.only, selection=args.selection)
