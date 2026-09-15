@@ -96,15 +96,23 @@ class SingleCurveDataset(Dataset):
 
 
 def random_time_mask(flux, observed, ratio_min=0.30, ratio_max=0.50):
-    """Instruction 2.2. Fresh mask every call -- never cached, never reused.
+    """Instruction 2.2 / spec 4.1. Fresh mask every call -- never cached, reused.
 
-    Returns `visible` (B, L): 1 where the encoder may see the value. Masked
-    cadences are hidden on top of the real gaps already in `observed`.
+    Hides 30-50% of each curve's CURRENTLY OBSERVED cadences (not 30-50% of the
+    1024 slots): on real curves only 79-95% of slots carry data, so sampling
+    over all slots would hide a smaller, coverage-dependent share of the real
+    signal and make the task easier for well-covered stars.
+
+    Returns `visible` (B, L): 1 where the encoder may read the value.
     """
     B, L = flux.shape
+    obs = observed > 0
+    n_obs = obs.sum(dim=1)                                        # (B,)
     ratios = torch.rand(B, device=flux.device) * (ratio_max - ratio_min) + ratio_min
-    k = (ratios * L).long()                                     # per-row mask count
-    order = torch.argsort(torch.rand(B, L, device=flux.device), dim=1)
+    k = (ratios * n_obs.float()).long()                           # per-row hide count
+    noise = torch.rand(B, L, device=flux.device)
+    noise = noise.masked_fill(~obs, float("inf"))                 # gaps sort last
+    order = torch.argsort(noise, dim=1)
     rank = torch.argsort(order, dim=1)
-    hide = rank < k.unsqueeze(1)
+    hide = rank < k.unsqueeze(1)                                  # only observed slots
     return observed * (~hide).float()

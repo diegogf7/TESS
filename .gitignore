@@ -6,3 +6,6 @@ __pycache__/
 # Multi-chip acquisition working data (FITS, indexes, caches) -- never commit
 disentangle_attempt/data_multichip/
 disentangle_attempt/outputs/*/dataset_cache/
+
+# vicreg_jepa run artifacts (checkpoints, caches, metrics)
+artifacts/vicreg_jepa/

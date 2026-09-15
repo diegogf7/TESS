@@ -16,9 +16,13 @@ class Part1Config:
     var_weight: float = 1.0       # anti-collapse on the 32 dims
     lr: float = 1e-3
     weight_decay: float = 0.0
+    grad_clip: float = 1.0   # real curves produce occasional huge-loss groups
     steps: int = 4000
     batch_groups: int = 4         # regions per batch
     log_every: int = 20
+    eval_every: int = 100         # validation cadence
+    val_groups: int = 200         # groups drawn per validation pass
+    val_batches: int = 20         # batches scored per validation pass
     ckpt: str = "artifacts/vicreg_jepa/part1_encoder.pt"
 
 
@@ -54,6 +58,8 @@ class Part2Config:
     batch_size: int = 256
     lr: float = 1e-3
     weight_decay: float = 1e-6
+    grad_clip: float = 1.0
     steps: int = 20000
     log_every: int = 20
+    eval_every: int = 200         # validation + collapse diagnostics cadence
     ckpt: str = "artifacts/vicreg_jepa/part2_jepa.pt"
