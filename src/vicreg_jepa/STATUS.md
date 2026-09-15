@@ -15,6 +15,7 @@ Last updated from the real-data pilot on the local workstation (CPU only).
 | Part 2 trained on real data | **Partial** — 400-step CPU pilot; collapsed under spec weights |
 | Part 1 saved and frozen | **Yes** — best-validation checkpoint, bit-identity asserted through Part 2 |
 | Pilot sweep completed | **No** — harness written and exercised, full 4-cell grid not run |
+| Collapse-gated search (≥100 trials) | **No** — harness written, refusal path verified on 4 trials |
 | Ablations + 3-seed final runs | **No** — harness written, not run |
 | Test set evaluated exactly once | **No** — deliberately not touched |
 | Final table, mean ± sd across seeds | **No** |
@@ -79,6 +80,32 @@ selected the worst available one.
 `is_collapsed` now applies the spec's two conditions plus an effective-rank
 floor at 25% of the latent width, and `collapse_reasons` records which fired.
 Under the corrected rule step 399 is rejected for `effective_rank<16.0`.
+
+## Collapse-gated search
+
+The sweep was rebuilt so that a checkpoint failing any collapse check is never
+saved, never ranked and never selected. See `README.md` for the gate and the
+three-stage protocol.
+
+**The ≥100-trial search has NOT been run.** Same three blockers: no GPU for the
+~780,000 training steps the three stages require (100×2.5k + 12×10k×2 +
+3×30k×3), no Sector 14 / dense_v2 cohort on this machine, and no PhyTS labels —
+which are ranking criterion 1. Without labels the search runs but emits a
+warning that the ranking is *not* the specified one, rather than silently
+degrading to correlation-only selection.
+
+**Machinery verified end-to-end on real curves.** A 4-trial / 60-step demo:
+
+- the known-collapsing control (`phi=1, lambda=25, mu=1, nu=0.01`) was pruned
+  after 2 consecutive rejected validations and recorded `eligible=False`
+- all four trials failed the gate, and the search wrote
+  `"selected": null, "status": "NO VALID CONFIGURATION FOUND"` with an expanded
+  search space — it did not promote the least-collapsed trial
+
+**This demo says nothing about the hyperparameter space.** Sixty steps is far
+too few for any configuration to leave its initial collapsed state (latent
+starts at effective rank ~8, median std ~0.10). It demonstrates that the refusal
+path works, and nothing more.
 
 ## To finish on the cluster
 
