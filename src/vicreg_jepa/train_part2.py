@@ -19,6 +19,7 @@ from .data import SingleCurveDataset
 from .models import S4Encoder
 from .part2_losses import total_loss, l_inv, l_var, l_cov, l_cor_sys
 from .part2_model import PhysicsJEPA, block_mask
+from .gradnorm import GradNorm
 from .real_data import RealCurveSource, git_sha
 
 DEVICE = os.environ.get("TESS_DEVICE",
@@ -139,6 +140,24 @@ def main(a):
               f"mu={mu:.3g} nu={nu:.3g}  (lam_scale={a.lam_scale})", flush=True)
         json.dump(cfg, open(os.path.join(a.out, "config.json"), "w"), indent=2)
 
+    gn_bal = None
+    if a.gradnorm:
+        # GradNorm starts UNIFORM and discovers the balance from measured
+        # gradient norms. Seeding it with the gradient-balanced values breaks it:
+        # those span four orders of magnitude, and renormalising them to sum to
+        # the number of terms drives phi and lam to ~0, switching off the
+        # invariance loss entirely.
+        gn_bal = GradNorm(model.online.head.weight, None,
+                          alpha=a.gradnorm_alpha, lr=a.gradnorm_lr, device=DEVICE)
+        w = gn_bal.weights()
+        phi, lam, mu, nu = w["inv"], w["cor_sys"], w["var"], w["cov"]
+        cfg["gradnorm"] = {"alpha": a.gradnorm_alpha, "lr": a.gradnorm_lr,
+                           "every": a.gradnorm_every, "init": w}
+        print(f"[gradnorm] on, alpha={a.gradnorm_alpha} every={a.gradnorm_every} "
+              f"init phi={phi:.3g} lam={lam:.3g} mu={mu:.3g} nu={nu:.3g}", flush=True)
+        json.dump(cfg, open(os.path.join(a.out, "config.json"), "w"), indent=2)
+
+    mu_dual = mu
     mu_min, mu_max = a.mu_min, a.mu_max
     best, best_step, streak, step = float("inf"), -1, 0, 0
     while step < a.steps:
@@ -146,6 +165,17 @@ def main(a):
             flux, obs = flux.to(DEVICE), obs.to(DEVICE)
             mf, mc = block_mask(flux, obs, a.mask_ratio)
             zo, zp, zt, zs = model(flux, obs, mf, mc)
+
+            if gn_bal is not None and step % a.gradnorm_every == 0:
+                terms = {"inv": l_inv(zp, zt), "cor_sys": l_cor_sys(zo, zs),
+                         "var": l_var(zo, a.gamma), "cov": l_cov(zo)}
+                w, lg = gn_bal.step(terms)
+                phi, lam, nu = w["inv"], w["cor_sys"], w["cov"]
+                # GradNorm down-weights fast-falling terms, and L_var falls fast
+                # exactly while the latent shrinks. The dual-ascent multiplier is
+                # kept as a hard floor so the constraint cannot be traded away.
+                mu = max(w["var"], mu_dual) if a.dual_mu else w["var"]
+
             loss, parts = total_loss(zo, zp, zt, zs, phi, lam, mu, nu, a.gamma)
 
             opt.zero_grad(set_to_none=True)
@@ -161,10 +191,12 @@ def main(a):
             if a.dual_mu:
                 with torch.no_grad():
                     std_med = float(zo.std(dim=0).median())
-                mu = float(np.clip(mu + a.dual_eta * (a.gamma - std_med),
-                                   mu_min, mu_max))
+                mu_dual = float(np.clip(mu_dual + a.dual_eta * (a.gamma - std_med),
+                                        mu_min, mu_max))
+                mu = max(mu, mu_dual)
             rec = {"step": step, **parts, "tau": tau, "grad_norm": float(gn),
-                   "mu": mu, "lam": lam, "nu": nu}
+                   "mu": mu, "lam": lam, "nu": nu, "phi": phi,
+                   "mu_dual": mu_dual}
             if step % a.eval_every == 0 or step == a.steps - 1:
                 v = validate(model, vflux, vobs, cfg, DEVICE, thresholds, streak)
                 streak = v["streak"]
@@ -180,7 +212,8 @@ def main(a):
                 print(f"[part2] {step:5d} inv={parts['inv']:.4f} cor={parts['cor_sys']:.4f} "
                       f"var={parts['var']:.4f} cov={parts['cov']:.4f} | "
                       f"val_inv={v['val_inv']:.4f} erank={v['effective_rank']:.1f} "
-                      f"std={v['std_median']:.3f} mu={mu:.2f}"
+                      f"std={v['std_median']:.3f} | w: phi={phi:.2f} lam={lam:.2f} "
+                      f"mu={mu:.1f} nu={nu:.2f}"
                       + ("  REJECT " + "; ".join(v["why"][:2]) if v["rejected"] else "  ok"),
                       flush=True)
             with open(mpath, "a") as fh:
@@ -230,4 +263,9 @@ if __name__ == "__main__":
     p.add_argument("--dual-eta", type=float, default=0.5)
     p.add_argument("--mu-min", type=float, default=0.0)
     p.add_argument("--mu-max", type=float, default=500.0)
+    p.add_argument("--gradnorm", action="store_true",
+                   help="GradNorm: rebalance weights continuously by gradient norm")
+    p.add_argument("--gradnorm-alpha", type=float, default=1.5)
+    p.add_argument("--gradnorm-lr", type=float, default=2.5e-2)
+    p.add_argument("--gradnorm-every", type=int, default=20)
     main(p.parse_args())

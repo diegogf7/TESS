@@ -80,6 +80,18 @@ def main(a):
     classes = json.load(open(os.path.splitext(a.npz)[0] + "_manifest.json"))["label_classes"]
     names = [k for k, _ in sorted(classes.items(), key=lambda kv: kv[1])]
 
+    # Drop classes so the run matches a prior benchmark's class set. The S14
+    # benchmarks are 7-class with INSTRUMENT/JUNK removed; comparing an 8-class
+    # balanced accuracy against them is not a like-for-like number.
+    if a.drop_class:
+        drop = {classes[c] for c in a.drop_class if c in classes}
+        if drop:
+            for s in srcs:
+                keep[s] = np.array([i for i in keep[s] if lab[s][i] not in drop])
+            names = [n for n in names if classes[n] not in drop]
+            print(f"dropped {sorted(a.drop_class)} -> {len(names)} classes; "
+                  f"labelled now " + ", ".join(f"{s}={len(keep[s])}" for s in srcs))
+
     arms = {}
 
     if a.part1:
@@ -128,6 +140,7 @@ def main(a):
         print(f"{n:<22}{r['dim']:>5}{r['val_bacc_linear']:>12.4f}{r['val_bacc_knn']:>10.4f}"
               f"{r['test_bacc_linear']:>13.4f}{r['test_bacc_knn']:>10.4f}")
     print(f"\nchance = {1/len(names):.4f} ({len(names)} classes, balanced accuracy)")
+    print("classes: " + ", ".join(names))
 
     out = {"results": results, "classes": names, "npz": a.npz,
            "part1": a.part1, "part2": a.part2, "seed": a.seed}
@@ -143,5 +156,7 @@ if __name__ == "__main__":
     p.add_argument("--part2", default=None)
     p.add_argument("--random-control", action="store_true")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--drop-class", nargs="*", default=None,
+                   help='class names to exclude, e.g. "INSTRUMENT/JUNK"')
     p.add_argument("--out", default="artifacts/vicreg_jepa/classification.json")
     main(p.parse_args())
