@@ -8,19 +8,51 @@ def masked_mse(pred, target, mask):
     return d.sum() / mask.sum().clamp(min=1.0)
 
 
+def masked_smooth_l1(pred, target, mask, beta=1.0):
+    """Huber / smooth-L1 over observed cadences only.
+
+    Normalised TGLC curves carry extreme outliers that a squared error cannot
+    cope with: measured on the Sector-1 cache, the worst 0.01% of cadences hold
+    90.7% of the total squared flux, and peak |flux| reaches 2842 MAD. Under MSE
+    the gradient is almost entirely those few points, so the encoder never
+    learns the common mode. Beyond `beta` this loss grows linearly, so a 2842-MAD
+    spike contributes ~2842 rather than ~8e6. Matches the convention already used
+    in disentangle_attempt/losses.py.
+    """
+    d = torch.abs(pred - target)
+    quad = torch.where(d < beta, 0.5 * d * d / beta, d - 0.5 * beta)
+    return (quad * mask).sum() / mask.sum().clamp(min=1.0)
+
+
 def leave_one_out_mean(z):
     """(B, G, D) -> (B, G, D): for each curve, the mean of its G-1 peers."""
     G = z.shape[1]
     return (z.sum(dim=1, keepdim=True) - z) / (G - 1)
 
 
-def common_mode_loss(decoder, z, flux, observed):
+def common_mode_loss(decoder, z, flux, observed, robust=True, beta=1.0):
     """Part 1. Predict each curve from its peers' latents, so z_i is trained to
-    carry exactly the part of curve i that its neighbours share: systematics."""
+    carry exactly the part of curve i that its neighbours share: systematics.
+
+    `robust=True` uses smooth-L1. Plain MSE is left available for comparison but
+    is not a sane default on these curves -- see masked_smooth_l1.
+    """
     B, G, D = z.shape
     g = leave_one_out_mean(z).reshape(B * G, D)
     pred = decoder(g).reshape(B, G, -1)
+    if robust:
+        return masked_smooth_l1(pred, flux, observed, beta)
     return masked_mse(pred, flux, observed)
+
+
+def zero_baseline_loss(flux, observed, robust=True, beta=1.0):
+    """The score for predicting nothing. Part 1 must beat THIS, not just the
+    region median -- on real curves the region median is barely better than zero.
+    """
+    zero = torch.zeros_like(flux)
+    if robust:
+        return masked_smooth_l1(zero, flux, observed, beta)
+    return masked_mse(zero, flux, observed)
 
 
 def variance_loss(z, gamma=1.0):

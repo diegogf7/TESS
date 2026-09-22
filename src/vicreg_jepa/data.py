@@ -125,3 +125,94 @@ def random_time_mask(flux, observed, ratio_min=0.30, ratio_max=0.50,
     rank = torch.argsort(order, dim=1)
     hide = rank < k.unsqueeze(1)                                  # only observed slots
     return observed * (~hide).float()
+
+
+class LocalGroupDataset(Dataset):
+    """Groups of spatially ADJACENT stars, for the systematics encoder.
+
+    RegionGroupDataset draws its 32 stars at random from a whole `area`
+    (camera x ccd x radial ring), which spans the entire CCD -- several degrees.
+    Scattered light varies across that span, so a random draw does not share one
+    common mode and the leave-one-out target is partly unlearnable.
+
+    This sampler instead picks a seed star and takes its `group_size - 1` nearest
+    neighbours on the sky, so every group is a genuine local patch. `radius_deg`
+    caps the patch size: a seed whose neighbours are further away than that is
+    rejected and redrawn, which keeps sparse corners from producing groups that
+    are "nearest" but not actually close.
+    """
+
+    def __init__(self, source, group_size=32, groups_per_epoch=2000, seed=0,
+                 radius_deg=1.0, same_area=True):
+        from scipy.spatial import cKDTree
+        self.flux = source.flux
+        self.observed = source.observed
+        self.group_size = group_size
+        self.groups_per_epoch = groups_per_epoch
+        self.radius_deg = radius_deg
+        self.rng = np.random.default_rng(seed)
+
+        ra = np.radians(np.asarray(source.ra, dtype=np.float64))
+        dec = np.radians(np.asarray(source.dec, dtype=np.float64))
+        self.xyz = np.stack([np.cos(dec) * np.cos(ra),
+                             np.cos(dec) * np.sin(ra),
+                             np.sin(dec)], axis=1)
+        self.area = np.asarray(source.area)
+        self.same_area = same_area
+        self.tree = cKDTree(self.xyz)
+
+        # chord length for the angular cap: 2*sin(theta/2)
+        self.max_chord = 2.0 * np.sin(np.radians(radius_deg) / 2.0)
+
+        # a seed is usable only if enough neighbours sit inside the cap
+        counts = self.tree.query_ball_point(self.xyz, self.max_chord,
+                                            return_length=True)
+        self.seeds = np.flatnonzero(counts >= group_size)
+        if len(self.seeds) == 0:
+            raise ValueError(
+                f"no star has {group_size} neighbours within {radius_deg} deg; "
+                "widen radius_deg or download a denser field")
+
+    def __len__(self):
+        return self.groups_per_epoch
+
+    def stats(self):
+        return {"usable_seeds": int(len(self.seeds)), "stars": int(len(self.xyz)),
+                "radius_deg": self.radius_deg, "group_size": self.group_size}
+
+    def __getitem__(self, _):
+        for _ in range(64):
+            s = int(self.seeds[self.rng.integers(len(self.seeds))])
+            d, nb = self.tree.query(self.xyz[s], k=self.group_size * 3)
+            nb = nb[np.isfinite(d) & (d <= self.max_chord)]
+            if self.same_area:
+                nb = nb[self.area[nb] == self.area[s]]
+            if len(nb) >= self.group_size:
+                pick = nb[:self.group_size]
+                return (torch.from_numpy(self.flux[pick]),
+                        torch.from_numpy(self.observed[pick]).float())
+        # fall back to plain nearest neighbours rather than failing a batch
+        _, nb = self.tree.query(self.xyz[s], k=self.group_size)
+        return (torch.from_numpy(self.flux[nb]),
+                torch.from_numpy(self.observed[nb]).float())
+
+
+def group_separation_report(source, group_size=32, radius_deg=1.0, n=200, seed=0):
+    """How far apart are the stars in a random vs a local group? Diagnostic."""
+    from scipy.spatial import cKDTree
+    from .real_data import sphere_distance
+    rng = np.random.default_rng(seed)
+    ra, dec, area = source.ra, source.dec, source.area
+    rnd, loc = [], []
+    ds = LocalGroupDataset(source, group_size, 1, seed, radius_deg)
+    for _ in range(n):
+        a = area[rng.integers(len(area))]
+        pool = np.flatnonzero(area == a)
+        if len(pool) >= group_size:
+            p = rng.choice(pool, group_size, replace=False)
+            rnd.append(sphere_distance(ra[p], dec[p], ra[p].mean(), dec[p].mean()).max())
+        s = int(ds.seeds[rng.integers(len(ds.seeds))])
+        _, nb = ds.tree.query(ds.xyz[s], k=group_size)
+        loc.append(sphere_distance(ra[nb], dec[nb], ra[s], dec[s]).max())
+    return {"random_area_group_radius_deg_median": float(np.median(rnd)) if rnd else None,
+            "local_group_radius_deg_median": float(np.median(loc))}

@@ -19,12 +19,13 @@ import torch
 from torch.utils.data import DataLoader
 
 from .config import Part1Config, Part2Config
-from .data import (SyntheticCurveSource, RegionGroupDataset, SingleCurveDataset,
-                   random_time_mask)
+from .data import (SyntheticCurveSource, RegionGroupDataset, LocalGroupDataset,
+                   SingleCurveDataset, random_time_mask)
 from .collapse import CollapseThresholds, assess
 from .evaluate import (collapse_report, collapse_reasons, is_collapsed,
                        mean_abs_corr, encode_source)
-from .losses import common_mode_loss, variance_loss, total_loss
+from .losses import (common_mode_loss, variance_loss, total_loss,
+                     zero_baseline_loss)
 from .models import S4Encoder, CommonModeDecoder, VICRegJEPA
 from .real_data import RealCurveSource, assert_tic_disjoint, git_sha
 
@@ -177,10 +178,17 @@ def train_part1(sources, cfg=Part1Config(), seed=0, run_root=None, device=DEVICE
                  {"part": 1, "splits": {k: getattr(v, "describe", lambda: len(v.flux))()
                                         for k, v in sources.items()}})
 
-    tr = DataLoader(RegionGroupDataset(sources["train"], cfg.group_size, seed=seed),
+    def groups(src, per_epoch, sd):
+        if getattr(cfg, "local_groups", False) and hasattr(src, "ra"):
+            ds = LocalGroupDataset(src, cfg.group_size, per_epoch, sd,
+                                   cfg.group_radius_deg)
+            print(f"[part1] local groups ({src.split_name}): {ds.stats()}", flush=True)
+            return ds
+        return RegionGroupDataset(src, cfg.group_size, per_epoch, sd)
+
+    tr = DataLoader(groups(sources["train"], 2000, seed),
                     batch_size=cfg.batch_groups, num_workers=0, drop_last=True)
-    va = DataLoader(RegionGroupDataset(sources["val"], cfg.group_size,
-                                       groups_per_epoch=cfg.val_groups, seed=seed + 1),
+    va = DataLoader(groups(sources["val"], cfg.val_groups, seed + 1),
                     batch_size=cfg.batch_groups, num_workers=0, drop_last=True)
 
     enc = S4Encoder(cfg.latent_dim, cfg.n_tokens, cfg.d_model,
@@ -228,12 +236,24 @@ def train_part1(sources, cfg=Part1Config(), seed=0, run_root=None, device=DEVICE
                 break
 
     baseline = region_median_baseline(va, max_batches=cfg.val_batches)
-    summary = {"best_val_common": best, "region_median_baseline": baseline,
-               "beats_baseline": bool(best < baseline)}
+    zeros, nb = 0.0, 0
+    for b, (fl, ob) in enumerate(va):
+        if b >= cfg.val_batches:
+            break
+        zeros += float(zero_baseline_loss(fl.to(device), ob.to(device)))
+        nb += 1
+    zeros /= max(nb, 1)
+    summary = {"best_val_common": best,
+               "region_median_baseline": baseline,
+               "zero_prediction_baseline": zeros,
+               "beats_region_median": bool(best < baseline),
+               "beats_zero_prediction": bool(best < zeros),
+               "gain_over_zero_pct": 100 * (1 - best / zeros) if zeros else None}
     with open(run.path("summary.json"), "w") as fh:
         json.dump(summary, fh, indent=2)
-    print(f"[part1] best val {best:.4f} vs region-median baseline {baseline:.4f} "
-          f"-> {'BEATS' if best < baseline else 'DOES NOT BEAT'}", flush=True)
+    print(f"[part1] best val {best:.4f} | zero-prediction {zeros:.4f} "
+          f"({summary['gain_over_zero_pct']:+.1f}%) | region-median {baseline:.4f} "
+          f"-> {'BEATS zero' if best < zeros else 'DOES NOT BEAT zero'}", flush=True)
     return run.path("part1_best.pt"), summary
 
 

@@ -47,15 +47,22 @@ class DataConfig:
     split_seed: int = 43
     label_csv: str = ""               # optional: TIC,label  (PhyTS)
     require_labels: bool = False
+    strict_quality: bool = False      # True = drop on ANY nonzero TESS bit
 
 
 # ------------------------------------------------------------------ helpers
-def quality_keep(tess_flags, tglc_flags, flux):
-    """Cadences whose every quality gate passes and whose flux is finite."""
+def quality_keep(tess_flags, tglc_flags, flux, strict=False):
+    """Cadences whose every quality gate passes and whose flux is finite.
+
+    strict=False (default): drop only TESS_flags & 16437 (attitude tweak, coarse
+    point, desat, ...). Stray-light cadences (bit 2048) are KEPT.
+    strict=True: drop on ANY nonzero TESS bit, stray light included.
+    """
     tess = np.asarray(tess_flags).astype(np.int64)
     tglc = np.asarray(tglc_flags).astype(np.int64)
     f = np.asarray(flux, dtype=np.float64)
-    return ((tess & BAD_TESS_MASK) == 0) & (tglc == 0) & np.isfinite(f)
+    bad_tess = (tess != 0) if strict else ((tess & BAD_TESS_MASK) != 0)
+    return (~bad_tess) & (tglc == 0) & np.isfinite(f)
 
 
 def normalize_median_mad(flux):
@@ -188,7 +195,7 @@ def build_cache(cfg: DataConfig, verbose=True):
                or len(tf) != t.size or len(gf) != t.size:
                 drop["malformed"] += 1
                 continue
-            keep = quality_keep(tf, gf, f)
+            keep = quality_keep(tf, gf, f, cfg.strict_quality)
             if keep.sum() < 2:
                 drop["no_surviving_cadence"] += 1
                 continue
@@ -337,6 +344,8 @@ class RealCurveSource:
         self.camera = d["camera"][sel]
         self.ccd = d["ccd"][sel]
         self.area = d["area"][sel]
+        self.ra = d["ra"][sel]
+        self.dec = d["dec"][sel]
         self.label = d["label"][sel]
         self.region = self.area                 # RegionGroupDataset reads `region`
         if len(self.flux) == 0:

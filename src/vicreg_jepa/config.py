@@ -6,6 +6,8 @@ class Part1Config:
     """Common-mode (systematics) curve encoder."""
     seq_len: int = 1024
     group_size: int = 32          # curves per region, Instruction 1.3
+    local_groups: bool = True     # group by sky proximity, not by ring label
+    group_radius_deg: float = 1.0 # cap on a group's angular radius
     latent_dim: int = 32          # Instruction 1.1
     n_tokens: int = 4             # 32 = 4 time blocks x 8 features
     d_model: int = 256
