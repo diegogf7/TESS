@@ -76,6 +76,13 @@ def load_sources(args):
     if args.source == "real":
         srcs = {s: RealCurveSource(args.npz, s) for s in ("train", "val", "test")}
         assert_tic_disjoint(*srcs.values())
+        # peer pool for validation groups: train + val, never test
+        pool = RealCurveSource(args.npz, "all")
+        keep = np.isin(pool.tic, np.concatenate([srcs["train"].tic, srcs["val"].tic]))
+        for a in ("flux","observed","tic","sector","camera","ccd","area","ra","dec","label"):
+            setattr(pool, a, getattr(pool, a)[keep])
+        pool.region = pool.area
+        srcs["train_val_pool"] = pool
         return srcs
     syn = SyntheticCurveSource(n_regions=args.syn_regions, per_region=args.syn_per_region)
     # split synthetic by index so the same code path runs end to end
@@ -178,17 +185,20 @@ def train_part1(sources, cfg=Part1Config(), seed=0, run_root=None, device=DEVICE
                  {"part": 1, "splits": {k: getattr(v, "describe", lambda: len(v.flux))()
                                         for k, v in sources.items()}})
 
-    def groups(src, per_epoch, sd):
+    def groups(src, per_epoch, sd, peers=None):
         if getattr(cfg, "local_groups", False) and hasattr(src, "ra"):
             ds = LocalGroupDataset(src, cfg.group_size, per_epoch, sd,
-                                   cfg.group_radius_deg)
+                                   cfg.group_radius_deg, peer_source=peers)
             print(f"[part1] local groups ({src.split_name}): {ds.stats()}", flush=True)
             return ds
         return RegionGroupDataset(src, cfg.group_size, per_epoch, sd)
 
     tr = DataLoader(groups(sources["train"], 2000, seed),
                     batch_size=cfg.batch_groups, num_workers=0, drop_last=True)
-    va = DataLoader(groups(sources["val"], cfg.val_groups, seed + 1),
+    # validation seeds come from val; peers may come from train+val so a tight
+    # radius stays reachable after the split thins the field
+    val_peers = sources.get("train_val_pool")
+    va = DataLoader(groups(sources["val"], cfg.val_groups, seed + 1, val_peers),
                     batch_size=cfg.batch_groups, num_workers=0, drop_last=True)
 
     enc = S4Encoder(cfg.latent_dim, cfg.n_tokens, cfg.d_model,

@@ -143,31 +143,45 @@ class LocalGroupDataset(Dataset):
     """
 
     def __init__(self, source, group_size=32, groups_per_epoch=2000, seed=0,
-                 radius_deg=1.0, same_area=True):
+                 radius_deg=1.0, same_area=True, peer_source=None):
+        """`peer_source`, when given, supplies the PEERS while `source` supplies
+        the seeds. Splitting by TIC thins a field by the split fraction, so in a
+        dense region a 15% validation subset can have no star with 32 validation
+        neighbours inside a tight radius even though the field itself is dense.
+        Drawing peers from the wider pool matches how the model is actually used:
+        at inference a star's neighbours are whatever is on the detector, not
+        whatever landed in the same split."""
         from scipy.spatial import cKDTree
-        self.flux = source.flux
-        self.observed = source.observed
+        peers = peer_source if peer_source is not None else source
+        self.flux = peers.flux
+        self.observed = peers.observed
         self.group_size = group_size
         self.groups_per_epoch = groups_per_epoch
         self.radius_deg = radius_deg
         self.rng = np.random.default_rng(seed)
 
-        ra = np.radians(np.asarray(source.ra, dtype=np.float64))
-        dec = np.radians(np.asarray(source.dec, dtype=np.float64))
+        ra = np.radians(np.asarray(peers.ra, dtype=np.float64))
+        dec = np.radians(np.asarray(peers.dec, dtype=np.float64))
         self.xyz = np.stack([np.cos(dec) * np.cos(ra),
                              np.cos(dec) * np.sin(ra),
                              np.sin(dec)], axis=1)
-        self.area = np.asarray(source.area)
+        self.area = np.asarray(peers.area)
         self.same_area = same_area
         self.tree = cKDTree(self.xyz)
 
         # chord length for the angular cap: 2*sin(theta/2)
         self.max_chord = 2.0 * np.sin(np.radians(radius_deg) / 2.0)
 
-        # a seed is usable only if enough neighbours sit inside the cap
-        counts = self.tree.query_ball_point(self.xyz, self.max_chord,
-                                            return_length=True)
-        self.seeds = np.flatnonzero(counts >= group_size)
+        # seeds are restricted to `source`; peers may come from the wider pool
+        if peer_source is not None:
+            want = set(np.asarray(source.tic).tolist())
+            self.seed_pool = np.flatnonzero(
+                np.isin(np.asarray(peers.tic), list(want)))
+        else:
+            self.seed_pool = np.arange(len(self.xyz))
+        counts = self.tree.query_ball_point(self.xyz[self.seed_pool],
+                                            self.max_chord, return_length=True)
+        self.seeds = self.seed_pool[counts >= group_size]
         if len(self.seeds) == 0:
             raise ValueError(
                 f"no star has {group_size} neighbours within {radius_deg} deg; "
