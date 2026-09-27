@@ -18,11 +18,12 @@ PY="${WORK}/venv_rocm/bin/python"
 export PYTHONUNBUFFERED=1 TESS_DEVICE=cuda
 NPZ=artifacts/vicreg_jepa/dense_s15.npz
 RADIUS="${RADIUS:-0.07}"
+GSIZE="${GSIZE:-32}"
 OUT="${OUT:-artifacts/vicreg_jepa/dense_r07}"
 
 $PY -c "import torch;print('gpu',torch.cuda.get_device_name(0))"
-echo "git $(git rev-parse --short HEAD)  radius=$RADIUS"
+echo "git $(git rev-parse --short HEAD)  radius=$RADIUS  group_size=$GSIZE"
 $PY -m src.vicreg_jepa.train --part 1 --source real --npz "$NPZ" \
-  --group-radius "$RADIUS" \
+  --group-radius "$RADIUS" --group-size "$GSIZE" \
   --steps1 12000 --eval-every 500 --val-batches 12 --seed 0 --out "$OUT"
 echo "=== DONE ==="

@@ -500,6 +500,8 @@ def add_common_args(ap):
     ap.add_argument("--eval-every", type=int, default=None)
     ap.add_argument("--val-batches", type=int, default=None)
     ap.add_argument("--batch-size", type=int, default=None)
+    ap.add_argument("--group-size", type=int, default=None,
+                    help="stars per Part 1 group")
     ap.add_argument("--group-radius", type=float, default=None,
                     help="cap on a Part 1 group's angular radius, degrees")
     return ap
@@ -523,6 +525,8 @@ def configs_from_args(args):
         c2.batch_size = args.batch_size
     if getattr(args, "group_radius", None):
         c1.group_radius_deg = args.group_radius
+    if getattr(args, "group_size", None):
+        c1.group_size = args.group_size
     return c1, c2
 
 
