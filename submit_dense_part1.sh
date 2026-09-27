@@ -16,7 +16,7 @@ set -u
 cd "${WORK}/TESS"
 PY="${WORK}/venv_rocm/bin/python"
 export PYTHONUNBUFFERED=1 TESS_DEVICE=cuda
-NPZ=artifacts/vicreg_jepa/dense_s15.npz
+NPZ="${NPZ:-artifacts/vicreg_jepa/dense_s15.npz}"
 RADIUS="${RADIUS:-0.07}"
 GSIZE="${GSIZE:-32}"
 OUT="${OUT:-artifacts/vicreg_jepa/dense_r07}"
