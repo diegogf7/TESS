@@ -18,4 +18,6 @@ $PY -m src.vicreg_jepa.corr_part1 \
   --out "${OUT:-artifacts/vicreg_jepa/corr_part1}" \
   --steps "${STEPS:-4000}" --dec-steps "${DEC_STEPS:-3000}" \
   --d-model "${DMODEL:-128}" --n-layers "${NLAYERS:-4}" \
+  --objective "${OBJECTIVE:-correlation}" \
+  --alpha "${ALPHA:-1.0}" --mu1 "${MU1:-1.0}" --nu1 "${NU1:-0.04}" \
   --group-size 32 --group-radius 0.0583

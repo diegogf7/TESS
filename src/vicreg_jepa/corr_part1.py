@@ -48,6 +48,16 @@ def l_var(Z, gamma=1.0):
     return torch.relu(gamma - torch.sqrt(z.var(dim=0) + EPS)).mean()
 
 
+def l_inv_vicreg(Z):
+    """VICReg invariance: squared distance of each latent from its group mean.
+    Equal, up to a constant, to the mean over all same-group pairs:
+        mean_{i!=j} ||z_i - z_j||^2 = (2/(G-1)) * sum_i ||z_i - zbar||^2
+    Unlike Pearson this is scale-sensitive -- it forces the latents to be equal,
+    magnitude included, not merely parallel.
+    """
+    return ((Z - Z.mean(dim=1, keepdim=True)) ** 2).sum(-1).mean()
+
+
 def l_cov(Z):
     z = Z.reshape(-1, Z.shape[-1])
     n, d = z.shape
@@ -57,7 +67,8 @@ def l_cov(Z):
     return off.pow(2).sum() / d
 
 
-def train_encoder(src, cfg, steps, alpha, mu1, nu1, out, seed=0):
+def train_encoder(src, cfg, steps, alpha, mu1, nu1, out, seed=0,
+                  objective="correlation"):
     torch.manual_seed(seed); np.random.seed(seed)
     os.makedirs(out, exist_ok=True)
     enc = S4Encoder(cfg.latent_dim, cfg.n_tokens, cfg.d_model,
@@ -72,20 +83,22 @@ def train_encoder(src, cfg, steps, alpha, mu1, nu1, out, seed=0):
             flux, obs = flux.to(DEVICE), obs.to(DEVICE)
             B, G, L = flux.shape
             Z = enc(flux.reshape(B*G, L), obs.reshape(B*G, L)).reshape(B, G, -1)
-            lc, lv, lcov = l_sys_corr(Z), l_var(Z, cfg.var_gamma), l_cov(Z)
+            lv, lcov = l_var(Z, cfg.var_gamma), l_cov(Z)
+            lc = l_inv_vicreg(Z) if objective == "vicreg" else l_sys_corr(Z)
             loss = alpha*lc + mu1*lv + nu1*lcov
             opt.zero_grad(set_to_none=True); loss.backward()
             torch.nn.utils.clip_grad_norm_(enc.parameters(), cfg.grad_clip)
             opt.step()
             if step % 200 == 0:
-                print(f"[corr] {step:5d} total={float(loss):.4f} "
+                tag = "vic " if objective == "vicreg" else "corr"
+                print(f"[{tag}] {step:5d} total={float(loss):.4f} "
                       f"corr_r={float(pairwise_corr(Z)):.4f} "
-                      f"L_sys={float(lc):.4f} L_var={float(lv):.4f} L_cov={float(lcov):.4f}",
+                      f"L_inv={float(lc):.4f} L_var={float(lv):.4f} L_cov={float(lcov):.4f}",
                       flush=True)
             step += 1
             if step >= steps: break
     torch.save({"encoder": enc.state_dict(), "cfg": cfg.__dict__, "git_sha": git_sha(),
-                "objective": "correlation", "alpha": alpha, "mu1": mu1, "nu1": nu1},
+                "objective": objective, "alpha": alpha, "mu1": mu1, "nu1": nu1},
                os.path.join(out, "corr_encoder.pt"))
     return enc
 
@@ -134,12 +147,15 @@ if __name__ == "__main__":
     p.add_argument("--alpha", type=float, default=1.0)
     p.add_argument("--mu1", type=float, default=1.0)
     p.add_argument("--nu1", type=float, default=0.04)
+    p.add_argument("--objective", choices=["correlation","vicreg"], default="correlation")
     a = p.parse_args()
     cfg = Part1Config()
     cfg.group_size, cfg.group_radius_deg = a.group_size, a.group_radius
     cfg.d_model, cfg.n_layers = a.d_model, a.n_layers
     src = RealCurveSource(a.npz, "train")
     print(f"device={DEVICE} train={len(src.flux)}", flush=True)
-    enc = train_encoder(src, cfg, a.steps, a.alpha, a.mu1, a.nu1, a.out)
+    print(f"objective={a.objective}  alpha={a.alpha} mu1={a.mu1} nu1={a.nu1}", flush=True)
+    enc = train_encoder(src, cfg, a.steps, a.alpha, a.mu1, a.nu1, a.out,
+                        objective=a.objective)
     fit_decoder(enc, src, cfg, a.dec_steps, a.out)
     print("=== DONE ===", flush=True)
