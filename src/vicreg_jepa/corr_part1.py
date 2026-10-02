@@ -73,7 +73,12 @@ def train_encoder(src, cfg, steps, alpha, mu1, nu1, out, seed=0,
     os.makedirs(out, exist_ok=True)
     enc = S4Encoder(cfg.latent_dim, cfg.n_tokens, cfg.d_model,
                     cfg.d_state, cfg.n_layers, 0.0).to(DEVICE)
-    opt = torch.optim.AdamW(enc.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+    # the reconstruction objective needs a decoder during encoder training; it is
+    # thrown away afterwards so every arm gets the SAME fresh frozen-decoder fit
+    aux = CommonModeDecoder(cfg.latent_dim, cfg.seq_len).to(DEVICE) \
+          if objective == "reconstruction" else None
+    params = list(enc.parameters()) + (list(aux.parameters()) if aux else [])
+    opt = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
     ds = LocalGroupDataset(src, cfg.group_size, 4000, seed, cfg.group_radius_deg)
     print(f"[corr] groups: {ds.stats()}", flush=True)
     dl = DataLoader(ds, batch_size=cfg.batch_groups, num_workers=0, drop_last=True)
@@ -84,13 +89,19 @@ def train_encoder(src, cfg, steps, alpha, mu1, nu1, out, seed=0,
             B, G, L = flux.shape
             Z = enc(flux.reshape(B*G, L), obs.reshape(B*G, L)).reshape(B, G, -1)
             lv, lcov = l_var(Z, cfg.var_gamma), l_cov(Z)
-            lc = l_inv_vicreg(Z) if objective == "vicreg" else l_sys_corr(Z)
+            if objective == "vicreg":
+                lc = l_inv_vicreg(Z)
+            elif objective == "reconstruction":
+                gmean = leave_one_out_mean(Z).reshape(B*G, -1)
+                lc = masked_smooth_l1(aux(gmean).reshape(B, G, -1), flux, obs)
+            else:
+                lc = l_sys_corr(Z)
             loss = alpha*lc + mu1*lv + nu1*lcov
             opt.zero_grad(set_to_none=True); loss.backward()
-            torch.nn.utils.clip_grad_norm_(enc.parameters(), cfg.grad_clip)
+            torch.nn.utils.clip_grad_norm_(params, cfg.grad_clip)
             opt.step()
             if step % 200 == 0:
-                tag = "vic " if objective == "vicreg" else "corr"
+                tag = {"vicreg":"vic ","reconstruction":"recon"}.get(objective,"corr")
                 print(f"[{tag}] {step:5d} total={float(loss):.4f} "
                       f"corr_r={float(pairwise_corr(Z)):.4f} "
                       f"L_inv={float(lc):.4f} L_var={float(lv):.4f} L_cov={float(lcov):.4f}",
@@ -147,7 +158,9 @@ if __name__ == "__main__":
     p.add_argument("--alpha", type=float, default=1.0)
     p.add_argument("--mu1", type=float, default=1.0)
     p.add_argument("--nu1", type=float, default=0.04)
-    p.add_argument("--objective", choices=["correlation","vicreg"], default="correlation")
+    p.add_argument("--objective",
+                   choices=["correlation","vicreg","reconstruction"],
+                   default="correlation")
     a = p.parse_args()
     cfg = Part1Config()
     cfg.group_size, cfg.group_radius_deg = a.group_size, a.group_radius
